@@ -16128,7 +16128,7 @@ def _wp_show_customer_login_easy_v2(self, default_code=""):
   <div class="round-icon" style="background:rgba(6,78,59,.52);border-color:rgba(52,211,153,.38);color:#dcfce7">☎</div>
   <div>
     <span class="help-label">NEED HELP?</span>
-    <b>{esc(contact_text) if contact_text.strip() else "Please contact the WiFi administrator if you need help."}</b>
+    <b>{esc(contact_text) if contact_text.strip() else 'Please contact the WiFi administrator if you need help.'}</b>
   </div>
 </div>
 <p class="footer-note">{esc(footer_text)}</p>
