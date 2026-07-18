@@ -30,7 +30,8 @@ mkdir -p /var/log/wifiportal
 BASE_URL="https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwrt/main"
 
 echo "正在下载主执行脚本及模块..."
-wget -qO /usr/lib/wifiportal/wifiportal.py "$BASE_URL/wifiportal.py"
+rm -f /usr/lib/wifiportal/wifiportal.py
+wget -qO /usr/bin/wifiportal.py "$BASE_URL/wifiportal.py"
 wget -qO /usr/lib/wifiportal/__init__.py "$BASE_URL/wifiportal/__init__.py"
 wget -qO /usr/lib/wifiportal/config.py "$BASE_URL/wifiportal/config.py"
 wget -qO /usr/lib/wifiportal/db.py "$BASE_URL/wifiportal/db.py"
