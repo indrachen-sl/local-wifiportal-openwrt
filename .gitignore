@@ -1,0 +1,16 @@
+vouchers.json
+vouchers.json.*
+settings.json
+settings.json.*
+config
+admin_security.json
+admin-backups/
+backup/
+export/
+*.bak
+*.tmp
+*.lock
+*.bad-json*
+*.suspect-shrink*
+__pycache__/
+*.pyc
