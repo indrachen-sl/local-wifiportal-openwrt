@@ -3990,16 +3990,16 @@ def print_vouchers_page(vouchers, lan_ip, portal_title="WiFi Access"):
         minutes = int(v.get("minutes", 0))
 
         if minutes == 0:
-            duration = "永久"
+            duration = "Permanent"
         elif minutes >= 1440:
-            duration = f"{minutes // 1440} 天"
+            duration = f"{minutes // 1440} day(s)"
         elif minutes >= 60:
-            duration = f"{minutes // 60} 小时"
+            duration = f"{minutes // 60} hour(s)"
         else:
-            duration = f"{minutes} 分钟"
+            duration = f"{minutes} minute(s)"
 
         max_devices = v.get("max_devices", 1)
-        device_text = f"限 {max_devices} 台设备" if max_devices > 1 else "仅限 1 台设备"
+        device_text = f"Up to {max_devices} devices" if max_devices > 1 else "One device only"
 
         target_url = f"http://{lan_ip}/?code={code}"
         qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=130x130&data={urllib.parse.quote(target_url)}"
@@ -4015,12 +4015,12 @@ def print_vouchers_page(vouchers, lan_ip, portal_title="WiFi Access"):
     </div>
     <div class="info-container">
       <div class="voucher-code">{esc(code)}</div>
-      <div class="plan-name">套餐: {esc(plan)} ({esc(duration)})</div>
+      <div class="plan-name">Plan: {esc(plan)} ({esc(duration)})</div>
       <div class="device-limit">{esc(device_text)}</div>
     </div>
   </div>
   <div class="card-footer">
-    扫码自动连接 或 访问 http://{esc(lan_ip)} 输入兑换码
+    Step 1: Scan the QR code or visit http://{esc(lan_ip)}. Step 2: Enter the voucher code above. Step 3: Connect and keep this card for reference.
   </div>
 </div>
 """)
@@ -4031,7 +4031,7 @@ def print_vouchers_page(vouchers, lan_ip, portal_title="WiFi Access"):
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>打印兑换码 - WiFi Portal</title>
+<title>Print Vouchers - WiFi Portal</title>
 <style>
 body {{
   font-family: system-ui, -apple-system, sans-serif;
@@ -4049,6 +4049,27 @@ body {{
   display: flex;
   justify-content: space-between;
   align-items: center;
+}}
+.print-only {{
+  display: none;
+}}
+.print-steps {{
+  background: white;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  page-break-inside: avoid;
+}}
+.print-steps h2 {{
+  margin: 0 0 8px;
+  font-size: 18px;
+}}
+.print-steps ol {{
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.5;
 }}
 .btn {{
   background: #2563eb;
@@ -4137,6 +4158,9 @@ body {{
   .no-print {{
     display: none;
   }}
+  .print-only {{
+    display: block;
+  }}
   .grid {{
     gap: 15px;
   }}
@@ -4150,9 +4174,23 @@ body {{
 <div class="no-print">
   <div>
     <h2 style="margin:0 0 5px;font-size:18px">打印预览</h2>
-    <span style="font-size:13px;color:#64748b">系统已准备好 {len(vouchers)} 张兑换码卡片。建议使用 A4 纸张打印。</span>
+    <div style="font-size:13px;color:#64748b;line-height:1.55">
+      <div>系统已准备好 {len(vouchers)} 张兑换码卡片，建议使用 A4 纸张打印。</div>
+      <div><b>第一步：</b>先检查下方卡片的兑换码、有效期、套餐和设备数量是否正确。</div>
+      <div><b>第二步：</b>点击“立即打印”，纸张选择 A4，缩放保持 100% 或浏览器默认值。</div>
+      <div><b>第三步：</b>建议先打印 1 页测试，对齐正常后再打印剩余页面。</div>
+    </div>
   </div>
   <button class="btn" onclick="window.print()">立即打印</button>
+</div>
+<div class="print-only print-steps">
+  <h2>How to Use This Voucher</h2>
+  <ol>
+    <li>Connect your phone, tablet, or computer to the WiFi network.</li>
+    <li>Scan the QR code on a voucher card, or open http://{esc(lan_ip)} in a browser.</li>
+    <li>Enter the voucher code exactly as printed on the card.</li>
+    <li>Keep the card until the session expires, because it shows the plan duration and device limit.</li>
+  </ol>
 </div>
 <div class="grid">
 {cards_joined}
