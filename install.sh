@@ -77,24 +77,17 @@ echo "正在启动 WiFiPortal 服务并设置开机自启..."
 /etc/init.d/wifiportal enable
 /etc/init.d/wifiportal restart
 
-# 7. 引导设置后台管理员密码
+# 7. 设置默认后台管理员密码
 echo ""
 echo "============================================="
-echo "🎁 部署成功！请输入您的后台管理密码 (至少8位):"
+echo "🎁 部署成功！正在设置默认后台管理密码..."
 echo "============================================="
-while true; do
-    read -r password
-    if [ ${#password} -lt 8 ]; then
-        echo "⚠️ 密码过短，至少需要 8 位，请重新输入:"
-    else
-        python3 -c "import sys; sys.path.append('/usr/lib'); from wifiportal.server import update_admin_password; ok, msg = update_admin_password('$password'); print('✅ 后台密码已成功设置为: ' + '$password' if ok else '❌ 设置失败: ' + msg)"
-        break
-    fi
-done
+python3 -c "import sys; sys.path.append('/usr/lib'); from wifiportal.server import update_admin_password; ok, msg = update_admin_password('admin123456'); print('✅ 后台密码已成功设置为: admin123456' if ok else '❌ 设置失败: ' + msg)"
 
 echo ""
 echo "---------------------------------------------"
 echo "部署完成！您可以通过以下方式访问后台："
 echo "👉 后台地址: http://192.168.10.1/admin"
 echo "👉 后台账号: admin"
+echo "👉 后台密码: admin123456"
 echo "---------------------------------------------"
