@@ -30,7 +30,8 @@ mkdir -p /var/log/wifiportal
 BASE_URL="https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwrt/main"
 
 echo "正在下载主执行脚本及模块..."
-rm -f /usr/lib/wifiportal/wifiportal.py /usr/bin/wifiportal.py
+rm -f /usr/lib/wifiportal/wifiportal.py
+rm -f /usr/bin/wifiportal.py
 wget -qO /usr/bin/wifiportal_launcher.py "$BASE_URL/wifiportal.py"
 wget -qO /usr/lib/wifiportal/__init__.py "$BASE_URL/wifiportal/__init__.py"
 wget -qO /usr/lib/wifiportal/config.py "$BASE_URL/wifiportal/config.py"
@@ -56,6 +57,20 @@ PORTAL_PORT=80
 ENABLE_QOS=1
 EOF
 fi
+
+echo "正在配置 LuCI 路由器后台到 8080 端口，释放 80 端口给认证页面..."
+if command -v uci >/dev/null 2>&1 && [ -f /etc/config/uhttpd ]; then
+    uci -q delete uhttpd.main.listen_http || true
+    uci add_list uhttpd.main.listen_http='0.0.0.0:8080'
+    uci add_list uhttpd.main.listen_http='[::]:8080'
+    uci commit uhttpd
+    /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
+else
+    echo "⚠️ 未找到 uhttpd/uci，跳过 LuCI 端口配置。请确认 80 端口未被其他服务占用。"
+fi
+
+echo "正在检查 Python 语法..."
+python3 -m py_compile /usr/bin/wifiportal_launcher.py /usr/lib/wifiportal/server.py /usr/lib/wifiportal/config.py /usr/lib/wifiportal/db.py /usr/lib/wifiportal/firewall.py /usr/lib/wifiportal/templates.py /usr/lib/wifiportal/utils.py
 
 # 6. 启用并启动服务
 echo "正在启动 WiFiPortal 服务并设置开机自启..."
