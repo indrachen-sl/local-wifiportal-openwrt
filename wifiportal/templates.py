@@ -3983,45 +3983,15 @@ button,
 
 def print_vouchers_page(vouchers, lan_ip, portal_title="WiFi Access"):
     card_htmls = []
-    import urllib.parse
+    wifi_name = str(portal_title or "WiFi").strip() or "WiFi"
     for v in vouchers:
         code = v.get("code", "")
-        plan = v.get("speed_profile_name", "Default Plan")
-        minutes = int(v.get("minutes", 0))
-
-        if minutes == 0:
-            duration = "Permanent"
-        elif minutes >= 1440:
-            duration = f"{minutes // 1440} day(s)"
-        elif minutes >= 60:
-            duration = f"{minutes // 60} hour(s)"
-        else:
-            duration = f"{minutes} minute(s)"
-
-        max_devices = v.get("max_devices", 1)
-        device_text = f"Up to {max_devices} devices" if max_devices > 1 else "One device only"
-
-        target_url = f"http://{lan_ip}/?code={code}"
-        qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=130x130&data={urllib.parse.quote(target_url)}"
 
         card_htmls.append(f"""
-<div class="voucher-card">
-  <div class="card-header">
-    <span class="wifi-icon">📶</span> <b>{esc(portal_title)}</b>
-  </div>
-  <div class="card-body">
-    <div class="qr-container">
-      <img src="{qr_url}" alt="QR Code" width="110" height="110">
-    </div>
-    <div class="info-container">
-      <div class="voucher-code">{esc(code)}</div>
-      <div class="plan-name">Plan: {esc(plan)} ({esc(duration)})</div>
-      <div class="device-limit">{esc(device_text)}</div>
-    </div>
-  </div>
-  <div class="card-footer">
-    Step 1: Connect to the venue WiFi network. Step 2: Scan the QR code or visit http://{esc(lan_ip)}. Step 3: Enter the voucher code above and keep this card for reference.
-  </div>
+<div class="voucher-label">
+  <div class="wifi-name">{esc(wifi_name)}</div>
+  <div class="label-rule"></div>
+  <div class="voucher-code">{esc(code)}</div>
 </div>
 """)
 
@@ -4031,124 +4001,93 @@ def print_vouchers_page(vouchers, lan_ip, portal_title="WiFi Access"):
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>Print Vouchers - WiFi Portal</title>
+<title>打印兑换码标签 - WiFi Portal</title>
 <style>
-body {{
-  font-family: system-ui, -apple-system, sans-serif;
+@page {{
+  size: 36.5mm 15mm;
   margin: 0;
-  padding: 20px;
+}}
+* {{
+  box-sizing: border-box;
+}}
+body {{
+  font-family: Arial, "Helvetica Neue", sans-serif;
+  margin: 0;
+  padding: 18px;
   background: #f8fafc;
-  color: #1e293b;
+  color: #0f172a;
 }}
 .no-print {{
   background: white;
   padding: 15px 20px;
-  border-radius: 12px;
+  border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-  margin-bottom: 25px;
+  margin-bottom: 20px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-}}
-.print-only {{
-  display: none;
-}}
-.print-steps {{
-  background: white;
-  border: 1px solid #cbd5e1;
-  border-radius: 10px;
-  margin-bottom: 16px;
-  padding: 12px 14px;
-  page-break-inside: avoid;
-}}
-.print-steps h2 {{
-  margin: 0 0 8px;
-  font-size: 18px;
-}}
-.print-steps ol {{
-  margin: 0;
-  padding-left: 20px;
-  font-size: 12px;
-  line-height: 1.5;
+  gap: 16px;
 }}
 .btn {{
   background: #2563eb;
   color: white;
   border: 0;
-  padding: 10px 20px;
+  padding: 10px 18px;
   font-size: 15px;
   font-weight: bold;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
+  white-space: nowrap;
 }}
 .btn:hover {{
   background: #1d4ed8;
 }}
-.grid {{
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 20px;
+.label-sheet {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6mm;
+  align-items: flex-start;
 }}
-.voucher-card {{
+.voucher-label {{
+  width: 36.5mm;
+  height: 15mm;
   background: white;
-  border: 2px dashed #cbd5e1;
-  border-radius: 12px;
-  padding: 15px;
+  border: 1px dashed #94a3b8;
+  border-radius: 1mm;
+  padding: 1.4mm 2mm 1.2mm;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  position: relative;
+  justify-content: center;
   page-break-inside: avoid;
+  overflow: hidden;
 }}
-.card-header {{
-  border-bottom: 1px solid #f1f5f9;
-  padding-bottom: 8px;
-  margin-bottom: 10px;
-  font-size: 15px;
-  display: flex;
-  align-items: center;
+.wifi-name {{
+  height: 4.4mm;
+  line-height: 4.4mm;
+  font-size: 9px;
+  font-weight: 700;
+  text-align: center;
+  color: #111827;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }}
-.wifi-icon {{
-  margin-right: 6px;
-}}
-.card-body {{
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}}
-.qr-container img {{
-  border: 1px solid #f1f5f9;
-  border-radius: 6px;
-  display: block;
-}}
-.info-container {{
-  flex: 1;
+.label-rule {{
+  border-top: 1px solid #111827;
+  margin: 0.8mm 0 1mm;
 }}
 .voucher-code {{
-  font-size: 22px;
+  height: 5.8mm;
+  line-height: 5.8mm;
+  font-family: Arial, "Helvetica Neue", sans-serif;
+  font-size: 15px;
   font-weight: 900;
-  letter-spacing: 1px;
-  color: #0f172a;
-  margin-bottom: 6px;
-  font-family: monospace;
-}}
-.plan-name {{
-  font-size: 13px;
-  font-weight: bold;
-  color: #2563eb;
-  margin-bottom: 4px;
-}}
-.device-limit {{
-  font-size: 12px;
-  color: #64748b;
-}}
-.card-footer {{
-  margin-top: 10px;
-  border-top: 1px dotted #e2e8f0;
-  padding-top: 8px;
-  font-size: 10px;
-  color: #64748b;
+  letter-spacing: 0.6px;
   text-align: center;
+  color: #000;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }}
 @media print {{
   body {{
@@ -4158,14 +4097,19 @@ body {{
   .no-print {{
     display: none;
   }}
-  .print-only {{
+  .label-sheet {{
     display: block;
+    gap: 0;
   }}
-  .grid {{
-    gap: 15px;
+  .voucher-label {{
+    border: 0;
+    border-radius: 0;
+    break-after: page;
+    page-break-after: always;
   }}
-  .voucher-card {{
-    border-color: #94a3b8;
+  .voucher-label:last-child {{
+    break-after: auto;
+    page-break-after: auto;
   }}
 }}
 </style>
@@ -4173,26 +4117,17 @@ body {{
 <body>
 <div class="no-print">
   <div>
-    <h2 style="margin:0 0 5px;font-size:18px">打印预览</h2>
+    <h2 style="margin:0 0 6px;font-size:18px">打印预览</h2>
     <div style="font-size:13px;color:#64748b;line-height:1.55">
-      <div>系统已准备好 {len(vouchers)} 张兑换码卡片，建议使用 A4 纸张打印。</div>
-      <div><b>第一步：</b>先检查下方卡片的兑换码、有效期、套餐和设备数量是否正确，并确认顾客知道要连接现场提供的 WiFi。</div>
-      <div><b>第二步：</b>点击“立即打印”，纸张选择 A4，缩放保持 100% 或浏览器默认值。</div>
-      <div><b>第三步：</b>建议先打印 1 页测试，对齐正常后再打印剩余页面。</div>
+      <div>当前共 {len(vouchers)} 张蓝牙标签，纸张规格为 15mm × 36.5mm。</div>
+      <div><b>第一步：</b>在“页面设置”里确认“打印标签 WiFi 名称”，它会显示在标签上方。</div>
+      <div><b>第二步：</b>确认下方预览：上方是 WiFi 名，中间横线隔开，下方是兑换码。</div>
+      <div><b>第三步：</b>点击“立即打印”，在蓝牙标签打印机里选择 15mm × 36.5mm 标签纸。</div>
     </div>
   </div>
   <button class="btn" onclick="window.print()">立即打印</button>
 </div>
-<div class="print-only print-steps">
-  <h2>How to Use This Voucher</h2>
-  <ol>
-    <li>Connect your phone, tablet, or computer to the WiFi network provided by this venue. If you do not know the WiFi name, ask the staff.</li>
-    <li>After joining that WiFi network, scan the QR code on a voucher card, or open http://{esc(lan_ip)} in a browser.</li>
-    <li>Enter the voucher code exactly as printed on the card, then submit it to connect to the Internet.</li>
-    <li>Keep the card until the session expires, because it shows the plan duration and device limit.</li>
-  </ol>
-</div>
-<div class="grid">
+<div class="label-sheet">
 {cards_joined}
 </div>
 </body>

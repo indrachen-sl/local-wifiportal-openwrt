@@ -6461,6 +6461,7 @@ class Handler(BaseHTTPRequestHandler):
             settings["portal_page"]["plan_text"] = form.get("plan_text", "")
             settings["portal_page"]["contact_text"] = form.get("contact_text", "")
             settings["portal_page"]["footer_text"] = form.get("footer_text", "")
+            settings["portal_page"]["print_wifi_name"] = form.get("print_wifi_name", "")
             save_settings(settings)
             append_log("ADMIN", "页面设置已保存")
             self.send_html(admin_page("设置已保存", "<div class='card'><h1 class='ok'>页面设置已保存</h1><a class='btn' href='/admin/settings'>返回</a></div>"))
@@ -8245,6 +8246,10 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
 <form method="post" action="/admin/settings">
 <p>认证页标题</p>
 <input name="title" value="{esc(portal.get("title", ""))}" style="width:100%;box-sizing:border-box">
+
+<p>打印标签 WiFi 名称</p>
+<input name="print_wifi_name" value="{esc(portal.get('print_wifi_name', ''))}" placeholder="例如：Coffee Guest WiFi" style="width:100%;box-sizing:border-box">
+<p class="muted">用于蓝牙标签打印机标签顶部，不填写时默认使用认证页标题。</p>
 
 <p>通知文本</p>
 <textarea name="notice">{esc(portal.get("notice", ""))}</textarea>
@@ -10057,7 +10062,7 @@ function wpVoucherBulkDeleteConfirmV2() {{
         db = load_db()
         settings = load_settings()
         portal = settings.get("portal_page", {})
-        title = portal.get("title", "WiFi Access")
+        title = portal.get("print_wifi_name", "") or portal.get("title", "WiFi Access")
 
         parsed = urllib.parse.urlparse(self.path)
         queries = urllib.parse.parse_qs(parsed.query)
