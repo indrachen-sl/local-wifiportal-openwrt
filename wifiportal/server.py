@@ -12978,6 +12978,19 @@ def _wp_startup_network_restore_background():
             pass
 
 
+def background_worker():
+    while True:
+        try:
+            cleanup_expired_and_firewall()
+            auto_backup_if_needed()
+        except Exception as error:
+            try:
+                append_log("SYSTEM", f"后台维护任务失败：{error}", result="FAIL")
+            except Exception:
+                pass
+        time.sleep(60)
+
+
 def main():
     print(f"WiFi Portal Web starting on 0.0.0.0:{PORTAL_PORT}", flush=True)
 
