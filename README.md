@@ -1,94 +1,292 @@
-# local-wifiportal-openwrt 2.0
+# local-wifiportal-openwrt
 
-基于 OpenWrt 的高性能、模块化本地 WiFi 兑换码认证 Portal 系统（Local Captive Portal）。
+OpenWrt 本地 WiFi 兑换码认证 Portal。它把路由器的 80 端口作为用户认证页面和 WiFiPortal 管理后台，把 OpenWrt/LuCI 路由器后台移动到 8080 端口。
 
----
+## 默认访问入口
 
-## 🌟 核心功能 (Key Features)
+部署完成后的默认入口如下：
 
-### 1. 认证拦截与 Portal (Captive Portal)
-*   **无感知重定向**：采用高效的 `nftables` 规则，自动拦截未认证客户端的 HTTP 请求，并流畅重定向至 Portal 登录页面。
-*   **自适应双模板**：内置 **Polished 现代极简版** 和 **Easy 自适应响应式版** 登录界面，完美适配手机、平板及 PC。
-*   **状态自助查询**：客户端提供快捷查询页面（`/check`），用户可实时查看自己的在线状态、剩余可用时长及已连接设备数。
+| 用途 | 地址 | 说明 |
+| --- | --- | --- |
+| 用户认证页面 | `http://192.168.10.1/` | 客户端输入兑换码上网 |
+| 用户状态查询 | `http://192.168.10.1/check` | 查看当前设备认证状态、剩余时间、套餐速度 |
+| WiFiPortal 管理后台 | `http://192.168.10.1/admin` | 管理兑换码、设备、限速、防火墙、备份等 |
+| OpenWrt/LuCI 路由器后台 | `http://192.168.10.1:8080/` | 原路由器后台，部署脚本会自动挪到 8080 |
 
-### 2. 兑换码管理系统 (Voucher System)
-*   **多元限制参数**：支持为兑换码设置可用分钟数（支持永久有效）、最大绑定设备数、下载/上传速率限制以及备注信息。
-*   **批量自定义前缀生成**：管理员可以在后台一次性批量生成最多 1000 个兑换码，并支持指定分类前缀（如 `VIP-`、`DAY-`），便于卡券分级管理。
-*   **自动填充与扫码登录**：支持通过 URL 参数自动填入（如 `http://192.168.10.1/?code=VIP-ABCDEF`），结合打印卡片实现“扫码免输代码，一键连接”。
+## 默认后台账号密码
 
-### 3. 排版网格卡片打印 (Printable Grid Cards)
-*   **打印专属排版**：后台集成专用打印卡片生成页面，采用网格虚线布局，专为 A4 纸张排版裁切优化，打印时自动隐藏后台控制栏。
-*   **离线扫码二维码**：每张卡片均内嵌该卡券专属的一键登录二维码。手机摄像头扫描即可自动跳转并预填券码。
+| 项目 | 默认值 |
+| --- | --- |
+| 后台地址 | `http://192.168.10.1/admin` |
+| 用户名 | `admin` |
+| 密码 | `admin123456` |
 
-### 4. QoS 智能流量限速 (Traffic Control)
-*   **设备级上下行限速**：使用 Linux 内核 `tc` (Traffic Control) 和 HTB (Hierarchical Token Bucket) 队列实现精细化的上下行速度限制。
-*   **模块自检与优雅降级**：初始化时自动检测路由器是否支持 `tc` 命令及相关内核模块。若不兼容，系统将优雅退避降级，保证核心认证功能不受影响。
+一键部署脚本会自动设置默认密码 `admin123456`，部署完成时也会直接显示账号和密码。
 
-### 5. 性能与安全性加固 (Performance & Security)
-*   **nftables 内存状态缓存**：在内存中缓存防火墙表的初始化状态，消除频繁执行 `nft` 子进程带来的 CPU 性能损耗，极大提升低端路由器的并发吞吐。
-*   **Flash 闪存擦写保护**：将后台暴力破解判定的锁定计数文件从 `/etc` 转移至系统运行内存目录 `/tmp`，避免高频日志写入导致物理 Flash 闪存芯片磨损老化。
-*   **管理后台安全审计**：支持管理员登录失败爆破防护锁定、后台操作安全审计日志，保护系统管理安全。
+如需在路由器 SSH 中重置后台密码：
 
-### 6. 数据灾备与自愈机制 (Database Backup & Self-Healing)
-*   **防断电原子写入**：所有数据读写（`vouchers.json`）均采用临时文件替换的原子保存技术，防止路由器突发断电导致数据库损坏。
-*   **自动备份与旧备份清理**：系统在运行中会自动保存历史数据库备份，并定期清理 7 天前的历史备份。
-*   **损坏数据库自动修复**：若主数据库文件受损，系统启动时会自动扫描备份文件并恢复至最近的健康状态。
-
----
-
-## 📦 项目文件结构 (Directory Structure)
-
-```text
-├── wifiportal.py             # 极简服务启动器（兼容 /etc/init.d 服务脚本调用）
-├── wifiportal/               # 核心业务 Python 包
-│   ├── __init__.py           # 包初始化入口
-│   ├── config.py             # 全局常量、路径及环境变量加载
-│   ├── utils.py              # 时间格式化、MAC正则化、HTML转义等工具库
-│   ├── db.py                 # 原子读写、损坏自愈、备份机制
-│   ├── firewall.py           # nftables 拦截、QoS 限速命令封装
-│   ├── templates.py          # 后台、客户端及打印卡片 HTML 模板
-│   └── server.py             # 核心路由分发、API 接口与业务 Handler
-├── init.d/
-│   └── wifiportal            # OpenWrt procd 开机自启服务管理脚本
-├── install.sh                # 一键部署与环境配置 Shell 脚本
-├── README.md                 # 说明文档
-└── .gitignore                # 敏感数据库与本地配置排除列表
+```sh
+python3 -c "import sys; sys.path.append('/usr/lib'); from wifiportal.server import update_admin_password; ok, msg = update_admin_password('admin123456'); print('重置成功' if ok else msg)"
 ```
 
----
+密码长度规则：至少 8 位。
 
-## 📥 一键部署命令 (One-Click Deployment)
+## 一键部署
 
-SSH 登录您的 OpenWrt 路由器，然后运行以下命令即可完成环境配置、依赖安装及自启动部署：
+SSH 登录 OpenWrt 后执行：
 
-```bash
+```sh
 wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwrt/main/install.sh | sh
 ```
 
----
+部署脚本会自动完成：
 
-## ⚙️ 配置文件说明 (`/etc/wifiportal/config`)
+- 安装依赖：`python3`、`python3-urllib`、`nftables`、`tc-full` 或 `tc`
+- 下载程序到 `/usr/lib/wifiportal`
+- 下载启动器到 `/usr/bin/wifiportal_launcher.py`
+- 安装 procd 服务脚本到 `/etc/init.d/wifiportal`
+- 生成默认配置 `/etc/wifiportal/config`
+- 把 LuCI/uhttpd HTTP 监听端口改为 `8080`
+- 检查 Python 语法
+- 启用并启动 WiFiPortal 服务
+- 设置默认后台密码 `admin123456`
 
-您可以通过修改路由器上的 `/etc/wifiportal/config` 文件调整核心参数：
-*   `LAN_IP`：路由器 LAN 口 IP 地址（Portal 重定向的目标地址，默认为 `192.168.10.1`）。
-*   `LAN_IF`：内网桥接接口（默认为 `br-lan`）。
-*   `WAN_IF`：外网出口接口（用于设定转发策略，默认为 `wan`）。
-*   `PORTAL_PORT`：Portal 服务监听端口（默认为 `80`）。
-*   `ENABLE_QOS`：是否启用 QoS 限速（`1` 为启用，`0` 为停用）。
+## 快速更新
 
----
+只更新主程序：
 
-## 🔑 管理员账号与密码重置
+```sh
+wget -qO /usr/lib/wifiportal/server.py https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwrt/main/wifiportal/server.py
+/etc/init.d/wifiportal restart
+```
 
-*   **后台地址**：`http://您的路由器LAN_IP/admin`（例如：`http://192.168.10.1/admin`）
-*   **用户名**：`admin`
-*   **密码设置/重置**：一键部署脚本结束时会引导您设置密码。如需重置，可通过 SSH 登录路由器，运行以下命令：
-    ```bash
-    python3 -c "import sys; sys.path.append('/usr/lib'); from wifiportal.server import update_admin_password; ok, msg = update_admin_password('新密码'); print('重置成功' if ok else msg)"
-    ```
+只更新启动器：
 
----
+```sh
+wget -qO /usr/bin/wifiportal_launcher.py https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwrt/main/wifiportal.py
+/etc/init.d/wifiportal restart
+```
 
-## ⚠️ 安全与隐私声明 (Disclaimer)
+重新完整部署：
 
-为了保护隐私，请勿将生成并在运行中的生产文件（如包含真实券码和客户端历史的 `vouchers.json`、系统密钥 `settings.json` 等）提交至公共代码仓库。本地的 `.gitignore` 已配置自动忽略此类敏感信息。
+```sh
+wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwrt/main/install.sh | sh
+```
+
+## 主要功能
+
+### 1. 用户认证 Portal
+
+- 未认证设备访问 HTTP 时会被 nftables 重定向到认证页面。
+- 用户在 `http://192.168.10.1/` 输入兑换码即可认证上网。
+- 支持通过 URL 预填兑换码，例如：`http://192.168.10.1/?code=VIP-ABCDEF`。
+- 用户可打开 `/check` 查看在线状态、剩余时间、绑定兑换码、套餐速度等。
+
+### 2. 兑换码管理
+
+后台入口：`/admin/vouchers`
+
+- 新增单个兑换码
+- 批量生成兑换码
+- 设置有效时长，支持永久码
+- 设置最大绑定设备数
+- 设置下载/上传限速
+- 启用、禁用、删除兑换码
+- 延长时间、重置使用状态
+- 查看兑换码绑定设备和使用日志
+- 导出未使用兑换码 CSV
+- 打印当前筛选兑换码
+
+### 3. 设备管理
+
+后台入口：`/admin/devices`
+
+- 查看在线设备和历史设备
+- 按在线/离线状态筛选
+- 搜索 MAC、IP、主机名、兑换码
+- 踢下线设备
+- 解绑设备和兑换码
+- 加入黑名单
+- 查看设备当前限速、登录时间、到期时间
+
+### 4. 白名单和黑名单
+
+后台入口：
+
+- 白名单：`/admin/whitelist`
+- 黑名单：`/admin/blacklist`
+
+白名单设备可直接放行。黑名单设备会被禁止或限制访问。后台支持手动输入 MAC，也支持从设备记录中选择。
+
+### 5. 防火墙拦截
+
+后台入口：`/admin/firewall`
+
+- 使用 nftables 管理认证放行列表
+- 未认证设备 HTTP 流量重定向到 Portal
+- 支持恢复已认证会话
+- 支持查看防火墙状态
+- 服务停止时会清理 WiFiPortal 相关 nftables 表
+
+### 6. QoS 限速
+
+后台入口：`/admin/qos`
+
+- 使用 Linux `tc` 对设备做下载/上传限速
+- 按兑换码套餐应用速率
+- 支持恢复在线设备限速规则
+- 支持清理 QoS 规则
+- 设备或系统不支持时可降级，不影响基础认证
+
+### 7. 页面设置
+
+后台入口：`/admin/settings`
+
+可配置用户认证页显示内容，包括标题、公告、套餐说明、联系信息、页脚等。
+
+### 8. 安全设置
+
+后台入口：`/admin/security`
+
+- 后台登录失败次数限制
+- 登录失败锁定
+- 清空锁定记录
+- 登录审计日志
+- 修改后台密码：`/admin/password`
+
+### 9. 日志、健康检查和维护
+
+后台入口：
+
+- 日志：`/admin/logs`
+- 健康检查：`/admin/health`
+- 系统维护：`/admin/maintenance`
+- 帮助：`/admin/help`
+
+可查看认证、后台登录、设备操作、防火墙、QoS、备份等日志。健康检查会检查服务进程、80 端口、LuCI 8080、数据文件、防火墙和 QoS 状态。
+
+### 10. 备份和恢复
+
+后台入口：`/admin/backup`
+
+- 创建管理备份
+- 下载备份
+- 恢复备份
+- 清理旧备份
+- 自动备份兑换码和设置数据
+- 数据库写入使用临时文件替换，降低断电损坏风险
+
+## 配置文件
+
+主配置文件：`/etc/wifiportal/config`
+
+常用配置项：
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `LAN_IP` | `192.168.10.1` | 路由器 LAN 地址，也是 Portal 访问地址 |
+| `LAN_IF` | `br-lan` | 内网桥接接口 |
+| `WAN_IF` | `wan` | 外网出口接口 |
+| `PORTAL_PORT` | `80` | WiFiPortal 监听端口 |
+| `DB_FILE` | `/etc/wifiportal/vouchers.json` | 兑换码和设备数据库 |
+| `SETTINGS_FILE` | `/etc/wifiportal/settings.json` | 页面和后台设置 |
+| `LOG_FILE` | `/var/log/wifiportal/wifiportal.log` | 日志文件 |
+| `ENABLE_QOS` | `1` | 是否启用 QoS 限速 |
+| `MAX_FAILED_ATTEMPTS` | `5` | 后台登录最大失败次数 |
+| `LOCK_SECONDS` | `300` | 后台登录失败锁定秒数 |
+
+修改配置后重启服务：
+
+```sh
+/etc/init.d/wifiportal restart
+```
+
+## 服务管理命令
+
+```sh
+/etc/init.d/wifiportal start
+/etc/init.d/wifiportal stop
+/etc/init.d/wifiportal restart
+/etc/init.d/wifiportal status
+/etc/init.d/wifiportal enable
+/etc/init.d/wifiportal disable
+```
+
+查看监听端口：
+
+```sh
+netstat -lntp | grep -E ':80 |:8080 '
+```
+
+正常情况应看到：
+
+```text
+0.0.0.0:80    LISTEN  python3
+0.0.0.0:8080  LISTEN  uhttpd
+:::8080       LISTEN  uhttpd
+```
+
+## 排查命令
+
+查看服务状态：
+
+```sh
+/etc/init.d/wifiportal status
+```
+
+查看 WiFiPortal 相关系统日志：
+
+```sh
+logread -e wifiportal | tail -120
+```
+
+检查 Python 语法：
+
+```sh
+python3 -m py_compile /usr/bin/wifiportal_launcher.py /usr/lib/wifiportal/server.py /usr/lib/wifiportal/config.py /usr/lib/wifiportal/db.py /usr/lib/wifiportal/firewall.py /usr/lib/wifiportal/templates.py /usr/lib/wifiportal/utils.py
+```
+
+检查本机页面是否响应。OpenWrt 精简版 `wget` 不支持 `-S`，请使用：
+
+```sh
+wget -O- http://127.0.0.1/ 2>&1 | head -40
+wget -O- http://127.0.0.1/admin 2>&1 | head -60
+wget -O- http://192.168.10.1/ 2>&1 | head -40
+wget -O- http://192.168.10.1/admin 2>&1 | head -60
+```
+
+如果服务显示 running，但浏览器打不开，优先贴这些输出：
+
+```sh
+/etc/init.d/wifiportal status
+logread -e wifiportal | tail -120
+netstat -lntp | grep -E ':80 |:8080 '
+cat /etc/wifiportal/config
+uci show uhttpd
+```
+
+## 项目结构
+
+```text
+.
+├── wifiportal.py              # 启动器，OpenWrt 服务从这里导入 wifiportal.server:main
+├── wifiportal/
+│   ├── __init__.py            # Python 包入口
+│   ├── config.py              # 配置加载和路径常量
+│   ├── db.py                  # JSON 数据读写、备份、自愈
+│   ├── firewall.py            # nftables 和 QoS/tc 操作
+│   ├── server.py              # HTTP 路由、后台功能、认证逻辑
+│   ├── templates.py           # 页面模板
+│   └── utils.py               # 时间、MAC、HTML 转义等工具
+├── init.d/
+│   └── wifiportal             # OpenWrt procd 服务脚本
+├── install.sh                 # 一键部署脚本
+├── README.md                  # 项目说明
+└── .gitignore                 # 忽略本地生成和敏感文件
+```
+
+## 安全提示
+
+默认密码 `admin123456` 方便首次部署。正式使用时建议登录后台后到 `/admin/password` 修改为更强密码。
+
+不要把真实生产环境的 `/etc/wifiportal/vouchers.json`、`/etc/wifiportal/settings.json`、备份文件或日志上传到公开仓库。
