@@ -3981,9 +3981,11 @@ button,
 </body>
 </html>"""
 
-def print_vouchers_page(vouchers, lan_ip, portal_title="WiFi Access"):
+def print_vouchers_page(vouchers, lan_ip, portal_title="WiFi Access", status_filter="unused", q=""):
     card_htmls = []
     wifi_name = str(portal_title or "WiFi").strip() or "WiFi"
+    status_filter = str(status_filter or "unused")
+    q = str(q or "")
     for v in vouchers:
         code = v.get("code", "")
 
@@ -4041,6 +4043,36 @@ body {{
 }}
 .btn:hover {{
   background: #1d4ed8;
+}}
+.print-settings {{
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}}
+.print-settings label {{
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+  margin-bottom: 4px;
+}}
+.print-settings input {{
+  width: min(320px, 60vw);
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 14px;
+}}
+.print-settings button {{
+  background: #0f172a;
+  color: white;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
 }}
 .label-sheet {{
   display: flex;
@@ -4120,10 +4152,19 @@ body {{
     <h2 style="margin:0 0 6px;font-size:18px">打印预览</h2>
     <div style="font-size:13px;color:#64748b;line-height:1.55">
       <div>当前共 {len(vouchers)} 张蓝牙标签，纸张规格为 15mm × 36.5mm。</div>
-      <div><b>第一步：</b>在“页面设置”里确认“打印标签 WiFi 名称”，它会显示在标签上方。</div>
+      <div><b>第一步：</b>在这里填写“打印标签 WiFi 名称”，点击“应用名称”，它会显示在标签上方。</div>
       <div><b>第二步：</b>确认下方预览：上方是 WiFi 名，中间横线隔开，下方是兑换码。</div>
       <div><b>第三步：</b>点击“立即打印”，在蓝牙标签打印机里选择 15mm × 36.5mm 标签纸。</div>
     </div>
+    <form class="print-settings" method="get" action="/admin/vouchers-print">
+      <input type="hidden" name="status" value="{esc(status_filter)}">
+      <input type="hidden" name="q" value="{esc(q)}">
+      <div>
+        <label for="print-wifi-name">打印标签 WiFi 名称</label>
+        <input id="print-wifi-name" name="wifi_name" value="{esc(wifi_name)}" placeholder="例如：Coffee Guest WiFi">
+      </div>
+      <button type="submit">应用名称</button>
+    </form>
   </div>
   <button class="btn" onclick="window.print()">立即打印</button>
 </div>
