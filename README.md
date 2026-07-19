@@ -41,14 +41,19 @@ wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwr
 部署脚本会自动完成：
 
 - 安装依赖：`python3`、`python3-urllib`、`nftables`、`tc-full` 或 `tc`
+- 覆盖程序前备份当前启动器、模块、服务脚本和配置到 `/etc/wifiportal/install-backups`
 - 下载程序到 `/usr/lib/wifiportal`
 - 下载启动器到 `/usr/bin/wifiportal_launcher.py`
+- 检查下载文件不为空，避免网络异常导致空文件覆盖程序
 - 安装 procd 服务脚本到 `/etc/init.d/wifiportal`
+- 安装 SSH 诊断命令 `/usr/bin/wifiportal-diagnose`
+- 安装 SSH 回滚命令 `/usr/bin/wifiportal-rollback`
 - 生成默认配置 `/etc/wifiportal/config`
-- 把 LuCI/uhttpd HTTP 监听端口改为 `8080`
+- 备份 `/etc/config/uhttpd`，再把 LuCI/uhttpd HTTP 监听端口改为 `8080`
 - 检查 Python 语法
 - 启用并启动 WiFiPortal 服务
 - 设置默认后台密码 `admin123456`
+- 运行部署后自检，检查服务、80/8080 端口、认证页和后台页，并保存结果到 `/tmp/wifiportal-install-check.log`
 
 ## 快速更新
 
@@ -87,14 +92,17 @@ wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwr
 
 - 新增单个兑换码
 - 批量生成兑换码
+- 设置兑换码批次名
+- 按批次筛选兑换码
+- 批次改名或清空批次名
 - 设置有效时长，支持永久码
 - 设置最大绑定设备数
 - 设置下载/上传限速
 - 启用、禁用、删除兑换码
 - 延长时间、重置使用状态
 - 查看兑换码绑定设备和使用日志
-- 导出未使用兑换码 CSV
-- 打印当前筛选兑换码
+- 导出未使用兑换码 CSV，包含批次名
+- 打印当前筛选兑换码、当前批次或勾选的兑换码
 
 ### 3. 设备管理
 
@@ -152,6 +160,8 @@ wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwr
 - 清空锁定记录
 - 登录审计日志
 - 修改后台密码：`/admin/password`
+- 后台 POST 操作 CSRF 防护，避免登录状态下被外部页面诱导执行管理操作
+- 后台会话密钥会持久保存，服务重启不会无故退出；修改密码时会自动轮换会话密钥并要求重新登录
 
 ### 9. 日志、健康检查和维护
 
@@ -159,10 +169,13 @@ wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwr
 
 - 日志：`/admin/logs`
 - 健康检查：`/admin/health`
+- 系统诊断：`/admin/diagnostics`
+- 纯文本诊断：`/admin/diagnostics.txt`
 - 系统维护：`/admin/maintenance`
+- 更新与安装备份：`/admin/install-backups`
 - 帮助：`/admin/help`
 
-可查看认证、后台登录、设备操作、防火墙、QoS、备份等日志。健康检查会检查服务进程、80 端口、LuCI 8080、数据文件、防火墙和 QoS 状态。
+可查看认证、后台登录、设备操作、防火墙、QoS、备份等日志。健康检查会检查服务进程、80 端口、LuCI 8080、数据文件、防火墙和 QoS 状态。系统诊断页面是只读排查页，会汇总服务状态、端口监听、本机访问、Python 语法、nftables、磁盘、内存、最近系统日志和最近安装备份，并提供一键复制按钮，方便后台或认证页无法访问时复制给维护人员。`/admin/diagnostics.txt` 会输出同样内容的纯文本版本。诊断输出会对密码哈希、会话密钥和 CSRF token 做脱敏处理。
 
 ### 10. 备份和恢复
 
@@ -174,6 +187,14 @@ wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwr
 - 清理旧备份
 - 自动备份兑换码和设置数据
 - 数据库写入使用临时文件替换，降低断电损坏风险
+
+更新与安装备份入口：`/admin/install-backups`
+
+- 查看 install.sh 覆盖程序前自动创建的代码备份
+- 下载安装备份包
+- 复制 SSH 回滚命令 `wifiportal-rollback <备份包路径>`
+- 从 GitHub main 分支触发一键更新
+- 查看最近一键更新日志 `/tmp/wifiportal-admin-update.log`
 
 ## 配置文件
 
@@ -227,6 +248,12 @@ netstat -lntp | grep -E ':80 |:8080 '
 
 ## 排查命令
 
+一键导出诊断信息：
+
+```sh
+wifiportal-diagnose
+```
+
 查看服务状态：
 
 ```sh
@@ -257,11 +284,33 @@ wget -O- http://192.168.10.1/admin 2>&1 | head -60
 如果服务显示 running，但浏览器打不开，优先贴这些输出：
 
 ```sh
+wifiportal-diagnose
+cat /tmp/wifiportal-install-check.log
 /etc/init.d/wifiportal status
 logread -e wifiportal | tail -120
 netstat -lntp | grep -E ':80 |:8080 '
 cat /etc/wifiportal/config
 uci show uhttpd
+```
+
+安装脚本修改 LuCI 端口前会备份原始配置，备份文件路径类似：
+
+```sh
+/etc/config/uhttpd.wifiportal-backup-20260720-153000
+```
+
+每次部署覆盖程序前也会创建代码备份，路径类似：
+
+```sh
+/etc/wifiportal/install-backups/wifiportal-code-backup-20260720-153000.tar.gz
+```
+
+如果更新后需要恢复上一版程序，可以先列出备份，再指定一个备份包回滚：
+
+```sh
+ls -1 /etc/wifiportal/install-backups/wifiportal-code-backup-*.tar.gz
+wifiportal-rollback /etc/wifiportal/install-backups/wifiportal-code-backup-20260720-153000.tar.gz
+wifiportal-diagnose
 ```
 
 ## 项目结构
@@ -286,6 +335,6 @@ uci show uhttpd
 
 ## 安全提示
 
-默认密码 `admin123456` 方便首次部署。正式使用时建议登录后台后到 `/admin/password` 修改为更强密码。
+默认密码 `admin123456` 方便首次部署。正式使用时建议登录后台后到 `/admin/password` 修改为更强密码；如果仍使用默认密码，后台会显示安全提醒。
 
 

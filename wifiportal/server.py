@@ -388,6 +388,7 @@ def update_admin_password(new_password):
     salt = secrets.token_hex(16)
     settings["admin"]["password_salt"] = salt
     settings["admin"]["password_hash"] = password_hash(new_password, salt)
+    settings["admin"]["session_secret"] = secrets.token_hex(32)
     save_settings(settings)
     append_log("ADMIN", "后台密码已修改")
     return True, "后台密码已修改，请重新登录"
@@ -4413,7 +4414,7 @@ def normalize_code(code):
     return str(code or "").strip().upper()
 
 
-def create_voucher_record(code, minutes, max_devices, download_mbps, upload_mbps, speed_name, note):
+def create_voucher_record(code, minutes, max_devices, download_mbps, upload_mbps, speed_name, note, batch_name=""):
     minutes = max(0, int(minutes))
     max_devices = max(1, int(max_devices))
     download_kbps = mbps_to_kbps(download_mbps)
@@ -4430,6 +4431,7 @@ def create_voucher_record(code, minutes, max_devices, download_mbps, upload_mbps
         "download_kbps": download_kbps,
         "upload_kbps": upload_kbps,
         "speed_profile_name": str(speed_name or "").strip() or "Default Plan",
+        "batch_name": str(batch_name or "").strip(),
         "devices": {}
     }
 
@@ -9089,6 +9091,7 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
         query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         search_text = str(query.get("q", [""])[0] or "").strip()
         status_filter = str(query.get("status", ["all"])[0] or "all").strip()
+        batch_filter = str(query.get("batch", [""])[0] or "").strip()
         if status_filter not in ["all", "unused", "active", "expired", "disabled"]:
             status_filter = "all"
 
@@ -9112,6 +9115,7 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
             return '<span class="dense-badge ' + cls + '">' + esc(status) + '</span>'
 
         all_vouchers = db.get("vouchers", {})
+        batch_counts = {}
         stats = {
             "all": len(all_vouchers),
             "unused": 0,
@@ -9123,6 +9127,9 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
         for item in all_vouchers.values():
             key = voucher_filter_key(item)
             stats[key] = stats.get(key, 0) + 1
+            batch_name = str(item.get("batch_name", "") or "").strip()
+            if batch_name:
+                batch_counts[batch_name] = batch_counts.get(batch_name, 0) + 1
 
         plan_options = []
         for index, plan in enumerate(plans):
@@ -9140,7 +9147,8 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
         def filter_link(key):
             active_class = " dense-filter-active" if status_filter == key else ""
             q_part = urllib.parse.quote(search_text)
-            return f'<a class="btn dense-filter-btn{active_class}" href="/admin/vouchers?status={key}&q={q_part}">{filter_labels[key]} <b>{stats.get(key, 0)}</b></a>'
+            batch_part = urllib.parse.quote(batch_filter)
+            return f'<a class="btn dense-filter-btn{active_class}" href="/admin/vouchers?status={key}&q={q_part}&batch={batch_part}">{filter_labels[key]} <b>{stats.get(key, 0)}</b></a>'
 
         filter_buttons = " ".join([
             filter_link("all"),
@@ -9169,8 +9177,11 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
         for code, voucher in sorted(all_vouchers.items()):
             status = voucher_status(voucher)
             filter_key = voucher_filter_key(voucher)
+            voucher_batch = str(voucher.get("batch_name", "") or "").strip()
 
             if status_filter != "all" and filter_key != status_filter:
+                continue
+            if batch_filter and voucher_batch != batch_filter:
                 continue
 
             search_blob = " ".join([
@@ -9178,6 +9189,7 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
                 str(status),
                 str(voucher.get("note", "")),
                 str(voucher.get("speed_profile_name", "")),
+                str(voucher.get("batch_name", "")),
                 str(format_duration(voucher.get("minutes", 0))),
                 str(remaining_text(voucher))
             ]).lower()
@@ -9196,7 +9208,8 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
             first_time = format_time(voucher.get("first_used_at", 0))
             expire_time = format_time(voucher.get("expire_at", 0))
             note_text = str(voucher.get("note", "") or "").strip()
-            note_html = esc(note_text) if note_text else "<span class='muted'>无</span>"
+            batch_html = f"<div class='dense-sub'>批次：{esc(voucher_batch)}</div>" if voucher_batch else "<div class='dense-sub'>批次：未分批</div>"
+            note_html = (esc(note_text) if note_text else "<span class='muted'>无</span>") + batch_html
             copy_js = json.dumps(str(code))
             code_q = urllib.parse.quote(str(code))
             status_badge = status_badge_html(status, filter_key)
@@ -9411,6 +9424,10 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
         <p>套餐</p>
         <select name="plan_index">{''.join(plan_options)}</select>
       </div>
+      <div>
+        <p>批次名</p>
+        <input name="batch_name" placeholder="如 2026-07 VIP">
+      </div>
       <div class="voucher-tools-submit-cell">
         <p>&nbsp;</p>
         <button type="submit" class="dense-mini-btn dense-good">新增兑换码</button>
@@ -9450,6 +9467,10 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
       <div>
         <p>套餐</p>
         <select name="plan_index">{''.join(plan_options)}</select>
+      </div>
+      <div>
+        <p>批次名</p>
+        <input name="batch_name" placeholder="留空则自动生成">
       </div>
       <div class="voucher-tools-submit-cell">
         <p>&nbsp;</p>
@@ -9562,6 +9583,32 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
 </div>
 """
 
+        batch_rows = []
+        for name, count in sorted(batch_counts.items()):
+            name_q = urllib.parse.quote(name)
+            active = " dense-filter-active" if batch_filter == name else ""
+            batch_rows.append(f"""
+<div style="display:inline-block;margin:4px 6px 4px 0">
+  <a class="btn dense-filter-btn{active}" href="/admin/vouchers?status={esc(status_filter)}&q={esc(urllib.parse.quote(search_text))}&batch={name_q}">{esc(name)} <b>{count}</b></a>
+  <form method="post" action="/admin/voucher-batch-rename" style="display:inline">
+    <input type="hidden" name="old_batch" value="{esc(name)}">
+    <input name="new_batch" placeholder="新批次名" style="width:130px">
+    <button class="dense-mini-btn" type="submit">改名</button>
+  </form>
+</div>
+""")
+
+        voucher_batch_panel_html = f"""
+<div class="card dense-list-card">
+<h2>兑换码批次</h2>
+<p class="muted">新增或批量生成时可填写批次名；这里按批次快速筛选、打印和改名。新批次名留空提交可清空该批次。</p>
+<div class="dense-filter-row">
+<a class="btn dense-filter-btn{' dense-filter-active' if not batch_filter else ''}" href="/admin/vouchers?status={esc(status_filter)}&q={esc(urllib.parse.quote(search_text))}">全部批次</a>
+{''.join(batch_rows) if batch_rows else '<span class="muted">暂无批次</span>'}
+</div>
+</div>
+"""
+
         body = f"""
 {voucher_display_warning}
 {export_unused_notice}
@@ -9580,10 +9627,12 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
 </div>
 
 {voucher_top_tools_html}
+{voucher_batch_panel_html}
 
 <div class="card dense-search-card">
 <form method="get" action="/admin/vouchers" class="dense-search-form">
 <input type="hidden" name="status" value="{esc(status_filter)}">
+<input type="hidden" name="batch" value="{esc(batch_filter)}">
 <input name="q" value="{esc(search_text)}" placeholder="搜索兑换码、套餐、备注、状态">
 <button type="submit">搜索</button>
 <a class="btn" href="/admin/vouchers">清空</a>
@@ -9591,7 +9640,7 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
 <div class="dense-filter-row">{filter_buttons}</div>
 <div class="dense-tool-row">
 <a class="btn" href="/admin/export-unused">导出未使用</a>
-<a class="btn" href="/admin/vouchers-print?status={esc(status_filter)}&q={esc(urllib.parse.quote(search_text))}" target="_blank">打印当前筛选列表</a>
+<a class="btn" href="/admin/vouchers-print?status={esc(status_filter)}&q={esc(urllib.parse.quote(search_text))}&batch={esc(urllib.parse.quote(batch_filter))}" target="_blank">打印当前筛选列表</a>
 <form method="post" action="/admin/voucher-delete-expired" onsubmit="return confirm('确认批量删除所有已过期兑换码？永久码和使用中兑换码不会删除。')">
 <button class="danger" type="submit">删除过期</button>
 </form>
@@ -9610,7 +9659,12 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
     <button class="danger dense-mini-btn" type="submit">批量删除所选</button>
   </form>
 
-  <span class="muted">只删除当前列表中勾选的兑换码</span>
+  <form method="get" action="/admin/vouchers-print" id="voucherBulkPrintFormV2" target="_blank" onsubmit="return wpVoucherBulkPrintV2()">
+    <input type="hidden" name="codes" id="voucherBulkPrintCodesV2">
+    <button class="dense-mini-btn dense-good" type="submit">打印所选</button>
+  </form>
+
+  <span class="muted">只处理当前列表中勾选的兑换码</span>
 </div>
 
 <table class="voucher-dense-table">
@@ -9655,6 +9709,16 @@ function wpVoucherBulkDeleteConfirmV2() {{
   document.getElementById('voucherBulkDeleteCodesV2').value = codes.join('\\n');
 
   return confirm('确认批量删除所选 ' + codes.length + ' 个兑换码？如果包含已使用兑换码，会踢掉绑定设备。');
+}}
+
+function wpVoucherBulkPrintV2() {{
+  var codes = wpVoucherSelectedCodesV2();
+  if (codes.length < 1) {{
+    alert('请先选择要打印的兑换码');
+    return false;
+  }}
+  document.getElementById('voucherBulkPrintCodesV2').value = codes.join('\\n');
+  return true;
 }}
 </script>
 </div>
@@ -10019,7 +10083,7 @@ function wpVoucherBulkDeleteConfirmV2() {{
             text = text.replace('"', '""')
             return '"=""' + text + '"""'
 
-        lines = ["Voucher Code,Duration Minutes,Device Limit,Download Mbps,Upload Mbps,Speed Plan,Note,Created Time"]
+        lines = ["Voucher Code,Duration Minutes,Device Limit,Download Mbps,Upload Mbps,Speed Plan,Batch,Note,Created Time"]
 
         for code, voucher in sorted(db.get("vouchers", {}).items()):
             if voucher.get("first_used_at", 0):
@@ -10034,6 +10098,7 @@ function wpVoucherBulkDeleteConfirmV2() {{
                 csv_cell(kbps_to_mbps(voucher.get("download_kbps", 0))),
                 csv_cell(kbps_to_mbps(voucher.get("upload_kbps", 0))),
                 csv_cell(voucher.get("speed_profile_name", "")),
+                csv_cell(voucher.get("batch_name", "")),
                 csv_cell(voucher.get("note", "")),
                 csv_cell(format_time(voucher.get("created_at", 0)))
             ]))
@@ -10061,11 +10126,20 @@ function wpVoucherBulkDeleteConfirmV2() {{
         queries = urllib.parse.parse_qs(parsed.query)
         status_filter = queries.get("status", ["unused"])[0].strip()
         q = queries.get("q", [""])[0].strip().upper()
+        batch_filter = queries.get("batch", [""])[0].strip()
+        selected_codes = []
+        raw_codes = queries.get("codes", [""])[0]
+        if raw_codes:
+            selected_codes = [normalize_code(item) for item in raw_codes.replace(",", "\n").splitlines() if normalize_code(item)]
         title = queries.get("wifi_name", [""])[0].strip() or portal.get("title", "WiFi Access")
 
         vouchers_list = []
         for code, voucher in sorted(db.get("vouchers", {}).items(), key=lambda x: x[0]):
+            if selected_codes and code not in selected_codes:
+                continue
             if q and q not in code:
+                continue
+            if batch_filter and str(voucher.get("batch_name", "") or "").strip() != batch_filter:
                 continue
 
             used = bool(voucher.get("first_used_at", 0))
@@ -10078,7 +10152,9 @@ function wpVoucherBulkDeleteConfirmV2() {{
                 if expire_at > 0 and expire_at <= now():
                     expired = True
 
-            if status_filter == "unused" and (used or not enabled or expired):
+            if selected_codes:
+                pass
+            elif status_filter == "unused" and (used or not enabled or expired):
                 continue
             elif status_filter == "active" and (not used or expired):
                 continue
@@ -10277,6 +10353,7 @@ function wpVoucherBulkDeleteConfirmV2() {{
     def admin_voucher_add(self):
         form = self.read_form()
         code = normalize_code(form.get("code", ""))
+        batch_name = str(form.get("batch_name", "") or "").strip()
         if len(code) < 3 or len(code) > 24:
             self.send_html(admin_page("新增失败", "<div class='card'><h1 class='bad'>兑换码长度必须是 3-24 位</h1><a class='btn' href='/admin/vouchers'>返回</a></div>"))
             return
@@ -10287,9 +10364,9 @@ function wpVoucherBulkDeleteConfirmV2() {{
             self.send_html(admin_page("新增失败", "<div class='card'><h1 class='bad'>兑换码已存在</h1><a class='btn' href='/admin/vouchers'>返回</a></div>"))
             return
 
-        db["vouchers"][code] = create_voucher_record(code, plan.get("minutes", 1440), plan.get("max_devices", 1), plan.get("download_mbps", 0), plan.get("upload_mbps", 0), plan.get("name", "Default Plan"), plan.get("note", ""))
+        db["vouchers"][code] = create_voucher_record(code, plan.get("minutes", 1440), plan.get("max_devices", 1), plan.get("download_mbps", 0), plan.get("upload_mbps", 0), plan.get("name", "Default Plan"), plan.get("note", ""), batch_name)
         save_db(db)
-        append_log("VOUCHER", f"新增兑换码 {code}", voucher_code=code)
+        append_log("VOUCHER", f"新增兑换码 {code}" + (f"，批次 {batch_name}" if batch_name else ""), voucher_code=code)
         self.redirect("/admin/vouchers")
 
     def admin_voucher_generate(self):
@@ -10299,22 +10376,30 @@ function wpVoucherBulkDeleteConfirmV2() {{
         prefix = str(form.get("prefix", "") or "").strip().upper()
         mode = form.get("mode", "numeric")
         plan = get_plan_by_index(form.get("plan_index", 0))
+        batch_name = str(form.get("batch_name", "") or "").strip()
+        if not batch_name:
+            batch_name = "batch-" + time.strftime("%Y%m%d-%H%M%S")
 
         db = load_db()
         created = []
         for _ in range(quantity):
             code = generate_voucher_code(length, mode, prefix, db["vouchers"])
-            db["vouchers"][code] = create_voucher_record(code, plan.get("minutes", 1440), plan.get("max_devices", 1), plan.get("download_mbps", 0), plan.get("upload_mbps", 0), plan.get("name", "Default Plan"), plan.get("note", ""))
+            db["vouchers"][code] = create_voucher_record(code, plan.get("minutes", 1440), plan.get("max_devices", 1), plan.get("download_mbps", 0), plan.get("upload_mbps", 0), plan.get("name", "Default Plan"), plan.get("note", ""), batch_name)
             created.append(code)
 
         save_db(db)
-        append_log("VOUCHER", f"批量生成 {len(created)} 个兑换码")
+        append_log("VOUCHER", f"批量生成 {len(created)} 个兑换码，批次 {batch_name}")
         body = f"""
 <div class='card'>
 <h1 class='ok'>批量生成成功</h1>
 <p>已生成 {len(created)} 个兑换码，套餐：{esc(plan.get("name", "Default Plan"))}</p>
+<p>批次：<code>{esc(batch_name)}</code></p>
 <textarea style='width:100%;height:260px;font-family:monospace'>{esc(chr(10).join(created))}</textarea>
-<p><a class='btn' href='/admin/vouchers'>返回兑换码管理</a></p>
+<p>
+<a class='btn' href='/admin/vouchers?batch={esc(urllib.parse.quote(batch_name))}'>查看该批次</a>
+<a class='btn' href='/admin/vouchers-print?batch={esc(urllib.parse.quote(batch_name))}' target='_blank'>打印该批次</a>
+<a class='btn' href='/admin/vouchers'>返回兑换码管理</a>
+</p>
 </div>
 """
         self.send_html(admin_page("批量生成成功", body))
@@ -16460,6 +16545,679 @@ Handler.show_customer_login = _wp_show_customer_login_easy_v2
 Handler.show_customer_check = _wp_show_customer_check_easy_v2
 Handler.show_auth_placeholder = _wp_show_auth_placeholder_easy_v2
 customer_page = _wp_customer_v2_page
+
+
+# ADMIN_DIAGNOSTICS_V1
+# Read-only troubleshooting page for deployment and runtime checks.
+
+def _wp_diag_cmd(label, command):
+    code, out, err = run_command(command)
+    text = out or err or ""
+    return {
+        "label": label,
+        "code": code,
+        "ok": code == 0,
+        "output": text.strip(),
+    }
+
+
+def _wp_diag_shell(label, script):
+    return _wp_diag_cmd(label, ["/bin/sh", "-c", script])
+
+
+def _wp_diag_short(value, default="-"):
+    value = str(value or "").strip()
+    return value if value else default
+
+
+def _wp_diag_redact(value):
+    text = str(value or "")
+    if not text:
+        return text
+
+    try:
+        import re
+        patterns = [
+            r'("?(?:password_hash|password_salt|session_secret|csrf_token|token|secret)"?\s*[:=]\s*)("[^"]*"|\'[^\']*\'|[^,\s}]+)',
+            r'((?:password_hash|password_salt|session_secret|csrf_token|token|secret)=)([^ \n\r\t]+)',
+        ]
+        for pattern in patterns:
+            text = re.sub(pattern, r'\1<redacted>', text, flags=re.IGNORECASE)
+    except Exception:
+        for key in ["password_hash", "password_salt", "session_secret", "csrf_token"]:
+            text = text.replace(key, key + "_redacted")
+
+    return text
+
+
+def _wp_collect_diagnostics():
+    checks = []
+    checks.append(_wp_diag_shell("WiFiPortal 服务", "/etc/init.d/wifiportal status 2>&1"))
+    checks.append(_wp_diag_shell("WiFiPortal 进程", "ps | grep wifiportal | grep -v grep | head -n 5"))
+    checks.append(_wp_diag_shell("80 端口监听", "netstat -lntp 2>/dev/null | grep ':80 ' | head -n 5"))
+    checks.append(_wp_diag_shell("8080 端口监听", "netstat -lntp 2>/dev/null | grep ':8080 ' | head -n 5"))
+    checks.append(_wp_diag_shell("认证页本机访问", "wget -q -T 5 -O- http://127.0.0.1/ 2>&1 | head -c 240"))
+    checks.append(_wp_diag_shell("后台本机访问", "wget -q -T 5 -O- http://127.0.0.1/admin 2>&1 | head -c 240"))
+    checks.append(_wp_diag_shell("LuCI 8080 本机访问", "wget -q -T 5 -O- http://127.0.0.1:8080/ 2>&1 | head -c 240"))
+    checks.append(_wp_diag_shell("Python 语法", "python3 -m py_compile /usr/bin/wifiportal_launcher.py /usr/lib/wifiportal/server.py /usr/lib/wifiportal/config.py /usr/lib/wifiportal/db.py /usr/lib/wifiportal/firewall.py /usr/lib/wifiportal/templates.py /usr/lib/wifiportal/utils.py 2>&1"))
+    checks.append(_wp_diag_shell("nftables 表", "nft list table inet wifiportal 2>&1 | head -n 20"))
+    checks.append(_wp_diag_shell("磁盘空间", "df -h / /tmp /etc 2>&1"))
+    checks.append(_wp_diag_shell("内存", "free 2>&1"))
+    checks.append(_wp_diag_shell("最近系统日志", "logread 2>/dev/null | grep -i wifiportal | tail -n 40"))
+
+    db_summary = {}
+    try:
+        db = load_db()
+        devices = db.get("devices", {}) if isinstance(db.get("devices", {}), dict) else {}
+        vouchers = db.get("vouchers", {}) if isinstance(db.get("vouchers", {}), dict) else {}
+        logs = db.get("logs", []) if isinstance(db.get("logs", []), list) else []
+        db_summary = {
+            "devices": len(devices),
+            "vouchers": len(vouchers),
+            "logs": len(logs),
+        }
+    except Exception as error:
+        db_summary = {"error": str(error)}
+
+    try:
+        settings = load_settings()
+    except Exception as error:
+        settings = {"error": str(error)}
+
+    install_backups = []
+    try:
+        backup_dir = "/etc/wifiportal/install-backups"
+        if os.path.isdir(backup_dir):
+            names = []
+            for name in os.listdir(backup_dir):
+                if name.startswith("wifiportal-code-backup-") and name.endswith(".tar.gz"):
+                    path = os.path.join(backup_dir, name)
+                    try:
+                        names.append((os.path.getmtime(path), path))
+                    except Exception:
+                        names.append((0, path))
+            names.sort(reverse=True)
+            install_backups = [path for mtime, path in names[:10]]
+    except Exception:
+        install_backups = []
+
+    status = {
+        "ok": all(item.get("ok") for item in checks[:4]),
+        "time": format_time(now()),
+        "lan_ip": LAN_IP,
+        "portal_port": PORTAL_PORT,
+        "db_file": DB_FILE,
+        "settings_file": SETTINGS_FILE,
+        "config_file": CONFIG_FILE,
+        "db": db_summary,
+        "settings_keys": sorted(settings.keys()) if isinstance(settings, dict) else [],
+        "install_backups": install_backups,
+        "checks": checks,
+    }
+    return status
+
+
+def _wp_diag_badge(ok):
+    if ok:
+        return '<span class="diag-badge diag-ok">OK</span>'
+    return '<span class="diag-badge diag-bad">FAIL</span>'
+
+
+def _wp_diag_text_report(report):
+    lines = []
+    lines.append("WiFiPortal Diagnostics")
+    lines.append("Time: " + str(report.get("time", "")))
+    lines.append("LAN IP: " + str(report.get("lan_ip", "")))
+    lines.append("Portal Port: " + str(report.get("portal_port", "")))
+    lines.append("Config: " + str(report.get("config_file", "")))
+    lines.append("DB: " + str(report.get("db_file", "")))
+    lines.append("Settings: " + str(report.get("settings_file", "")))
+    lines.append("")
+    lines.append("DB summary: " + json.dumps(report.get("db", {}), ensure_ascii=False, sort_keys=True))
+    lines.append("Settings keys: " + ", ".join(report.get("settings_keys", [])))
+    lines.append("Install backups:")
+    backups = report.get("install_backups", [])
+    if backups:
+        for path in backups:
+            lines.append("- " + str(path))
+    else:
+        lines.append("- none")
+    lines.append("")
+    for item in report.get("checks", []):
+        lines.append("[" + ("OK" if item.get("ok") else "FAIL") + "] " + str(item.get("label", "")) + " code=" + str(item.get("code", "")))
+        output = _wp_diag_redact(str(item.get("output", "") or "").strip())
+        if output:
+            lines.append(output)
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _wp_show_admin_diagnostics(self):
+    report = _wp_collect_diagnostics()
+    rows = []
+    backup_rows = []
+    for item in report.get("checks", []):
+        rows.append(f"""
+<tr>
+  <td>{esc(item.get('label', ''))}</td>
+  <td>{_wp_diag_badge(item.get('ok'))}</td>
+  <td><code>{esc(str(item.get('code', '')))}</code></td>
+  <td><pre>{esc(_wp_diag_short(_wp_diag_redact(item.get('output'))))}</pre></td>
+</tr>
+""")
+
+    for path in report.get("install_backups", []):
+        backup_rows.append(f"<li><code>{esc(path)}</code></li>")
+
+    if not backup_rows:
+        backup_rows.append("<li class='muted'>暂无安装备份</li>")
+
+    text_report = _wp_diag_text_report(report)
+    db_summary = report.get("db", {})
+    body = f"""
+<style>
+.diag-head {{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  align-items:flex-start;
+  flex-wrap:wrap;
+}}
+.diag-badge {{
+  display:inline-block;
+  min-width:54px;
+  text-align:center;
+  border-radius:999px;
+  padding:4px 9px;
+  color:#fff;
+  font-size:12px;
+  font-weight:800;
+}}
+.diag-ok {{ background:#16a34a; }}
+.diag-bad {{ background:#dc2626; }}
+.diag-table pre {{
+  margin:0;
+  white-space:pre-wrap;
+  word-break:break-word;
+  max-height:160px;
+  overflow:auto;
+  font-size:12px;
+}}
+.diag-copy {{
+  width:100%;
+  box-sizing:border-box;
+  min-height:260px;
+  font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size:12px;
+}}
+</style>
+<div class="card">
+  <div class="diag-head">
+    <div>
+      <h1>系统诊断</h1>
+      <p class="muted">只读检查服务、端口、页面访问、Python 语法、防火墙和最近日志。遇到无法访问时，可以复制下面的诊断结果。</p>
+    </div>
+    <div>
+      <a class="btn" href="/admin/diagnostics">重新检查</a>
+      <a class="btn" href="/admin/diagnostics.txt">打开纯文本</a>
+    </div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="stat">LAN IP<b>{esc(report.get('lan_ip', ''))}</b></div>
+  <div class="stat">认证端口<b>{esc(str(report.get('portal_port', '')))}</b></div>
+  <div class="stat">设备记录<b>{esc(str(db_summary.get('devices', '-')))}</b></div>
+  <div class="stat">兑换码<b>{esc(str(db_summary.get('vouchers', '-')))}</b></div>
+</div>
+
+<div class="card">
+  <h2>检查结果</h2>
+  <table class="diag-table">
+    <tr><th>项目</th><th>结果</th><th>代码</th><th>输出</th></tr>
+    {''.join(rows)}
+  </table>
+</div>
+
+<div class="card">
+  <h2>最近安装备份</h2>
+  <p class="muted">如更新后异常，可在 SSH 中使用 <code>wifiportal-rollback &lt;备份包路径&gt;</code> 恢复。</p>
+  <ul>
+    {''.join(backup_rows)}
+  </ul>
+</div>
+
+<div class="card">
+  <h2>复制给排查人员</h2>
+  <p><button type="button" onclick="wpCopyDiagnostics()">复制诊断结果</button></p>
+  <textarea id="diag-copy-text" class="diag-copy" readonly>{esc(text_report)}</textarea>
+</div>
+<script>
+function wpCopyDiagnostics() {{
+  var box = document.getElementById("diag-copy-text");
+  if (!box) {{ return; }}
+  box.focus();
+  box.select();
+  try {{
+    document.execCommand("copy");
+  }} catch (e) {{}}
+}}
+</script>
+"""
+    self.send_html(admin_page("系统诊断", body))
+
+
+def _wp_show_admin_diagnostics_text(self):
+    report = _wp_collect_diagnostics()
+    text = _wp_diag_text_report(report) + "\n"
+    data = text.encode("utf-8")
+    self.send_response(200)
+    self.send_header("Content-Type", "text/plain; charset=utf-8")
+    self.send_header("Cache-Control", "no-store")
+    self.send_header("Content-Length", str(len(data)))
+    self.end_headers()
+    self.wfile.write(data)
+
+
+_wp_old_handle_admin_get_diagnostics_v1 = Handler.handle_admin_get
+
+
+def _wp_handle_admin_get_diagnostics_v1(self, path):
+    if path == "/admin/diagnostics.txt":
+        if not self.require_admin():
+            return
+        _wp_show_admin_diagnostics_text(self)
+        return
+
+    if path == "/admin/diagnostics":
+        if not self.require_admin():
+            return
+        _wp_show_admin_diagnostics(self)
+        return
+    return _wp_old_handle_admin_get_diagnostics_v1(self, path)
+
+
+Handler.handle_admin_get = _wp_handle_admin_get_diagnostics_v1
+
+
+# ADMIN_DEFAULT_PASSWORD_WARNING_V1
+# Warn after login if the router still uses the deployment default password.
+
+_wp_old_admin_page_default_password_v1 = admin_page
+
+
+def _wp_admin_uses_default_password():
+    try:
+        return verify_admin_password("admin123456")
+    except Exception:
+        return False
+
+
+def _wp_admin_page_default_password_warning_v1(title, body, logged_in=True):
+    if logged_in and _wp_admin_uses_default_password():
+        warning = """
+<style>
+.default-password-warning {
+  background:#fff7ed;
+  border:1px solid #fdba74;
+  color:#9a3412;
+  border-radius:14px;
+  padding:13px 16px;
+  margin:0 0 14px;
+  box-shadow:0 8px 24px rgba(154,52,18,.08);
+}
+.default-password-warning b { color:#7c2d12; }
+.default-password-warning a { color:#1d4ed8; font-weight:800; text-decoration:none; }
+</style>
+<div class="default-password-warning">
+  <b>安全提醒：</b>当前后台仍在使用默认密码 <code>admin123456</code>。正式使用前建议到
+  <a href="/admin/password">修改密码</a> 页面更换为自己的强密码。
+</div>
+"""
+        body = warning + str(body or "")
+    return _wp_old_admin_page_default_password_v1(title, body, logged_in)
+
+
+admin_page = _wp_admin_page_default_password_warning_v1
+
+
+# ADMIN_CSRF_PROTECTION_V1
+# Protect logged-in admin POST actions with an injected per-process token.
+
+_wp_old_read_form_csrf_v1 = Handler.read_form
+_wp_old_handle_admin_post_csrf_v1 = Handler.handle_admin_post
+_wp_old_admin_page_csrf_v1 = admin_page
+
+
+def _wp_csrf_token():
+    return hashlib.sha256(("wifiportal-admin-csrf:" + SESSION_SECRET).encode("utf-8")).hexdigest()
+
+
+def _wp_read_form_csrf_v1(self):
+    cached = getattr(self, "_wp_cached_form", None)
+    if cached is not None:
+        return cached
+    form = _wp_old_read_form_csrf_v1(self)
+    self._wp_cached_form = form
+    return form
+
+
+def _wp_inject_csrf_token(html_text):
+    if 'name="csrf_token"' in html_text or "name='csrf_token'" in html_text:
+        return html_text
+
+    token_input = '<input type="hidden" name="csrf_token" value="' + esc(_wp_csrf_token()) + '">'
+
+    try:
+        import re
+        return re.sub(
+            r'(<form\b[^>]*\bmethod=["\']post["\'][^>]*>)',
+            r'\1' + token_input,
+            html_text,
+            flags=re.IGNORECASE,
+        )
+    except Exception:
+        return html_text.replace('<form method="post"', '<form method="post">' + token_input)
+
+
+def _wp_admin_page_csrf_v1(title, body, logged_in=True):
+    html_text = _wp_old_admin_page_csrf_v1(title, body, logged_in)
+    if logged_in:
+        html_text = _wp_inject_csrf_token(html_text)
+    return html_text
+
+
+def _wp_handle_admin_post_csrf_v1(self, path):
+    if path.startswith("/admin") and path != "/admin/login":
+        if not self.require_admin():
+            return
+
+        form = self.read_form()
+        token = str(form.get("csrf_token", "") or "")
+        if token != _wp_csrf_token():
+            try:
+                append_admin_audit(self, "后台 CSRF 校验失败", "path=" + str(path), result="FAIL")
+            except Exception:
+                pass
+            self.send_html(
+                admin_page(
+                    "安全校验失败",
+                    "<div class='card'><h1 class='bad'>安全校验失败</h1><p>页面可能已过期，请返回后台重新打开页面后再操作。</p><a class='btn' href='/admin'>返回后台</a></div>",
+                ),
+                403,
+            )
+            return
+
+    return _wp_old_handle_admin_post_csrf_v1(self, path)
+
+
+Handler.read_form = _wp_read_form_csrf_v1
+Handler.handle_admin_post = _wp_handle_admin_post_csrf_v1
+admin_page = _wp_admin_page_csrf_v1
+
+
+# ADMIN_PERSISTENT_SESSION_SECRET_V1
+# Keep admin sessions stable across service restarts and rotate them on password changes.
+
+def _wp_load_persistent_session_secret():
+    try:
+        settings = load_settings()
+        admin = settings.get("admin", {}) if isinstance(settings.get("admin", {}), dict) else {}
+        secret = str(admin.get("session_secret", "") or "").strip()
+        if len(secret) >= 32:
+            return secret
+
+        settings.setdefault("admin", {})
+        secret = secrets.token_hex(32)
+        settings["admin"]["session_secret"] = secret
+        save_settings(settings)
+        return secret
+    except Exception:
+        return SESSION_SECRET
+
+
+SESSION_SECRET = _wp_load_persistent_session_secret()
+
+
+# ADMIN_INSTALL_BACKUPS_AND_UPDATE_V1
+# Manage install-time code backups and trigger a guarded GitHub update from admin.
+
+def _wp_install_backup_dir():
+    return "/etc/wifiportal/install-backups"
+
+
+def _wp_safe_install_backup_name(value):
+    value = os.path.basename(str(value or "").strip())
+    allow = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
+    value = "".join(ch for ch in value if ch in allow)
+    if not value.startswith("wifiportal-code-backup-") or not value.endswith(".tar.gz"):
+        return ""
+    if "/" in value or ".." in value:
+        return ""
+    return value
+
+
+def _wp_list_install_backups():
+    backup_dir = _wp_install_backup_dir()
+    rows = []
+    try:
+        if not os.path.isdir(backup_dir):
+            return []
+        for name in os.listdir(backup_dir):
+            safe = _wp_safe_install_backup_name(name)
+            if not safe:
+                continue
+            path = os.path.join(backup_dir, safe)
+            try:
+                st = os.stat(path)
+            except Exception:
+                continue
+            rows.append({
+                "name": safe,
+                "path": path,
+                "size": st.st_size,
+                "mtime": int(st.st_mtime),
+            })
+    except Exception:
+        return []
+
+    rows.sort(key=lambda item: item.get("mtime", 0), reverse=True)
+    return rows
+
+
+def _wp_read_update_log():
+    path = "/tmp/wifiportal-admin-update.log"
+    try:
+        if not os.path.exists(path):
+            return "暂无一键更新日志。"
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return "".join(f.readlines()[-120:])
+    except Exception as error:
+        return "读取更新日志失败：" + str(error)
+
+
+def _wp_send_install_backup_file(self, name):
+    safe = _wp_safe_install_backup_name(name)
+    if not safe:
+        self.send_error(400, "Bad backup name")
+        return
+
+    path = os.path.join(_wp_install_backup_dir(), safe)
+    if not os.path.exists(path):
+        self.send_error(404, "Backup not found")
+        return
+
+    with open(path, "rb") as f:
+        data = f.read()
+
+    self.send_response(200)
+    self.send_header("Content-Type", "application/gzip")
+    self.send_header("Content-Disposition", "attachment; filename=" + safe)
+    self.send_header("Cache-Control", "no-store")
+    self.send_header("Content-Length", str(len(data)))
+    self.end_headers()
+    self.wfile.write(data)
+
+
+def _wp_show_admin_install_backups(self, notice=""):
+    import time as _time
+
+    rows = []
+    for item in _wp_list_install_backups()[:30]:
+        name = item.get("name", "")
+        path = item.get("path", "")
+        rollback_cmd = "wifiportal-rollback " + path
+        rows.append(f"""
+<tr>
+  <td><code>{esc(name)}</code></td>
+  <td>{esc(_wp_format_bytes(item.get('size', 0)))}</td>
+  <td>{esc(_time.strftime('%Y-%m-%d %H:%M:%S', _time.localtime(int(item.get('mtime', 0) or 0))))}</td>
+  <td><code>{esc(rollback_cmd)}</code></td>
+  <td><a class="btn" href="/admin/install-backups/download?name={urllib.parse.quote(name)}">下载</a></td>
+</tr>
+""")
+
+    if not rows:
+        rows.append("<tr><td colspan='5' class='muted'>暂无安装备份。重新部署一次后会自动生成。</td></tr>")
+
+    notice_html = f"<div class='info'>{esc(notice)}</div>" if notice else ""
+    update_log = _wp_diag_redact(_wp_read_update_log()) if "_wp_diag_redact" in globals() else _wp_read_update_log()
+    body = f"""
+<div class="card">
+  <h1>更新与安装备份</h1>
+  <p class="muted">这里管理 install.sh 覆盖程序前创建的代码备份。网页只负责查看和下载；回滚请在 SSH 中执行对应命令。</p>
+  {notice_html}
+</div>
+
+<div class="card">
+  <h2>一键更新</h2>
+  <p class="muted">从 GitHub main 分支重新运行安装脚本。更新前 install.sh 会自动备份当前程序，更新日志写入 /tmp/wifiportal-admin-update.log。</p>
+  <form method="post" action="/admin/system-update" onsubmit="return confirm('确认从 GitHub main 分支执行一键更新？更新过程中 WiFiPortal 服务会重启。')">
+    <button type="submit">开始一键更新</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>安装备份</h2>
+  <div style="overflow:auto">
+    <table class="dense-table">
+      <tr><th>备份文件</th><th>大小</th><th>时间</th><th>SSH 回滚命令</th><th>操作</th></tr>
+      {''.join(rows)}
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>最近更新日志</h2>
+  <pre style="white-space:pre-wrap;word-break:break-word;max-height:360px;overflow:auto">{esc(update_log)}</pre>
+</div>
+"""
+    self.send_html(admin_page("更新与安装备份", body))
+
+
+def _wp_admin_start_system_update(self):
+    form = self.read_form()
+    token = str(form.get("csrf_token", "") or "")
+    if "_wp_csrf_token" in globals() and token != _wp_csrf_token():
+        self.send_html(admin_page("安全校验失败", "<div class='card'><h1 class='bad'>安全校验失败</h1><a class='btn' href='/admin/install-backups'>返回</a></div>"), 403)
+        return
+
+    cmd = "wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwrt/main/install.sh | sh >/tmp/wifiportal-admin-update.log 2>&1"
+    try:
+        subprocess.Popen(["/bin/sh", "-c", cmd])
+        append_log("ADMIN", "后台触发一键更新")
+        try:
+            append_admin_audit(self, "后台触发一键更新")
+        except Exception:
+            pass
+        _wp_show_admin_install_backups(self, "一键更新已启动。请等待 30-90 秒后刷新本页，或在 SSH 中查看 /tmp/wifiportal-admin-update.log。")
+    except Exception as error:
+        _wp_show_admin_install_backups(self, "一键更新启动失败：" + str(error))
+
+
+_wp_old_handle_admin_get_install_backups_v1 = Handler.handle_admin_get
+_wp_old_handle_admin_post_install_backups_v1 = Handler.handle_admin_post
+
+
+def _wp_handle_admin_get_install_backups_v1(self, path):
+    if path == "/admin/install-backups":
+        if not self.require_admin():
+            return
+        _wp_show_admin_install_backups(self)
+        return
+
+    if path.startswith("/admin/install-backups/download"):
+        if not self.require_admin():
+            return
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        _wp_send_install_backup_file(self, query.get("name", [""])[0])
+        return
+
+    return _wp_old_handle_admin_get_install_backups_v1(self, path)
+
+
+def _wp_handle_admin_post_install_backups_v1(self, path):
+    if path == "/admin/system-update":
+        if not self.require_admin():
+            return
+        _wp_admin_start_system_update(self)
+        return
+
+    return _wp_old_handle_admin_post_install_backups_v1(self, path)
+
+
+Handler.handle_admin_get = _wp_handle_admin_get_install_backups_v1
+Handler.handle_admin_post = _wp_handle_admin_post_install_backups_v1
+
+
+# VOUCHER_BATCH_MANAGEMENT_V1
+# Rename or clear batch names without changing voucher validity.
+
+_wp_old_handle_admin_post_batch_management_v1 = Handler.handle_admin_post
+
+
+def _wp_handle_admin_post_batch_management_v1(self, path):
+    if path == "/admin/voucher-batch-rename":
+        if not self.require_admin():
+            return
+
+        form = self.read_form()
+        token = str(form.get("csrf_token", "") or "")
+        if "_wp_csrf_token" in globals() and token != _wp_csrf_token():
+            self.send_html(admin_page("安全校验失败", "<div class='card'><h1 class='bad'>安全校验失败</h1><a class='btn' href='/admin/vouchers'>返回</a></div>"), 403)
+            return
+
+        old_batch = str(form.get("old_batch", "") or "").strip()
+        new_batch = str(form.get("new_batch", "") or "").strip()
+        db = load_db()
+        changed = 0
+
+        for voucher in db.get("vouchers", {}).values():
+            if not isinstance(voucher, dict):
+                continue
+            if str(voucher.get("batch_name", "") or "").strip() == old_batch:
+                voucher["batch_name"] = new_batch
+                changed += 1
+
+        if changed:
+            save_db(db)
+            action_text = "清空批次" if not new_batch else "重命名批次"
+            append_log("VOUCHER", f"{action_text} {old_batch} -> {new_batch}，影响 {changed} 个兑换码")
+            try:
+                append_admin_audit(self, action_text, f"old={old_batch} new={new_batch} count={changed}")
+            except Exception:
+                pass
+
+        target = "/admin/vouchers"
+        if new_batch:
+            target += "?batch=" + urllib.parse.quote(new_batch)
+        self.redirect(target)
+        return
+
+    return _wp_old_handle_admin_post_batch_management_v1(self, path)
+
+
+Handler.handle_admin_post = _wp_handle_admin_post_batch_management_v1
 
 if __name__ == "__main__":
     main()
