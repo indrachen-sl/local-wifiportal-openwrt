@@ -15299,7 +15299,7 @@ def _wp_show_customer_login_polished(self, default_code=""):
     if contact_text.strip() or footer_text.strip():
         contact_html = f"""
 <div class="card">
-  <div class="contact-box">{esc(contact_text) if contact_text.strip() else "Please contact the WiFi administrator if you need help."}</div>
+  <div class="contact-box">{esc(contact_text) if contact_text.strip() else 'Please contact the WiFi administrator if you need help.'}</div>
   <p class="muted" style="margin:9px 0 0">{esc(footer_text)}</p>
 </div>
 """
@@ -16153,7 +16153,7 @@ def _wp_show_customer_login_easy_v2(self, default_code=""):
     <button type="submit">Connect Now</button>
   </form>
   <div class="small-link-line">Already connected? <a class="link" href="http://{esc(LAN_IP)}/check">Check device status</a></div>
-</div>"""
+</div>
 
 {help_html}
 """
@@ -16273,7 +16273,7 @@ def _wp_show_customer_check_easy_v2(self):
   <div class="round-icon" style="background:rgba(6,78,59,.52);border-color:rgba(52,211,153,.38);color:#dcfce7">☎</div>
   <div>
     <span class="help-label">NEED HELP?</span>
-    <b>{esc(contact_text) if contact_text.strip() else "Please contact the WiFi administrator if you need help."}</b>
+    <b>{esc(contact_text) if contact_text.strip() else 'Please contact the WiFi administrator if you need help.'}</b>
   </div>
 </div>
 <p class="footer-note">{esc(footer_text)}</p>
