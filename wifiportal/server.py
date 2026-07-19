@@ -6529,6 +6529,10 @@ class Handler(BaseHTTPRequestHandler):
             self.admin_voucher_bulk_delete()
             return
 
+        if path == "/admin/voucher-bulk-update":
+            self.admin_voucher_bulk_update()
+            return
+
         if path == "/admin/voucher-delete-expired":
             self.admin_voucher_delete_expired()
             return
@@ -9092,6 +9096,9 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
         search_text = str(query.get("q", [""])[0] or "").strip()
         status_filter = str(query.get("status", ["all"])[0] or "all").strip()
         batch_filter = str(query.get("batch", [""])[0] or "").strip()
+        plan_filter = str(query.get("plan", ["all"])[0] or "all").strip()
+        if not plan_filter:
+            plan_filter = "all"
         if status_filter not in ["all", "unused", "active", "expired", "disabled"]:
             status_filter = "all"
 
@@ -9116,6 +9123,7 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
 
         all_vouchers = db.get("vouchers", {})
         batch_counts = {}
+        plan_counts = {}
         stats = {
             "all": len(all_vouchers),
             "unused": 0,
@@ -9130,6 +9138,8 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
             batch_name = str(item.get("batch_name", "") or "").strip()
             if batch_name:
                 batch_counts[batch_name] = batch_counts.get(batch_name, 0) + 1
+            plan_name = str(item.get("speed_profile_name", "") or "").strip() or "Default Plan"
+            plan_counts[plan_name] = plan_counts.get(plan_name, 0) + 1
 
         plan_options = []
         for index, plan in enumerate(plans):
@@ -9148,7 +9158,8 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
             active_class = " dense-filter-active" if status_filter == key else ""
             q_part = urllib.parse.quote(search_text)
             batch_part = urllib.parse.quote(batch_filter)
-            return f'<a class="btn dense-filter-btn{active_class}" href="/admin/vouchers?status={key}&q={q_part}&batch={batch_part}">{filter_labels[key]} <b>{stats.get(key, 0)}</b></a>'
+            plan_part = urllib.parse.quote(plan_filter)
+            return f'<a class="btn dense-filter-btn{active_class}" href="/admin/vouchers?status={key}&q={q_part}&batch={batch_part}&plan={plan_part}">{filter_labels[key]} <b>{stats.get(key, 0)}</b></a>'
 
         filter_buttons = " ".join([
             filter_link("all"),
@@ -9178,8 +9189,11 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
             status = voucher_status(voucher)
             filter_key = voucher_filter_key(voucher)
             voucher_batch = str(voucher.get("batch_name", "") or "").strip()
+            voucher_plan = str(voucher.get("speed_profile_name", "") or "").strip() or "Default Plan"
 
             if status_filter != "all" and filter_key != status_filter:
+                continue
+            if plan_filter != "all" and voucher_plan != plan_filter:
                 continue
             if batch_filter and voucher_batch != batch_filter:
                 continue
@@ -9589,7 +9603,7 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
             active = " dense-filter-active" if batch_filter == name else ""
             batch_rows.append(f"""
 <div style="display:inline-block;margin:4px 6px 4px 0">
-  <a class="btn dense-filter-btn{active}" href="/admin/vouchers?status={esc(status_filter)}&q={esc(urllib.parse.quote(search_text))}&batch={name_q}">{esc(name)} <b>{count}</b></a>
+  <a class="btn dense-filter-btn{active}" href="/admin/vouchers?status={esc(status_filter)}&q={esc(urllib.parse.quote(search_text))}&batch={name_q}&plan={esc(urllib.parse.quote(plan_filter))}">{esc(name)} <b>{count}</b></a>
   <form method="post" action="/admin/voucher-batch-rename" style="display:inline">
     <input type="hidden" name="old_batch" value="{esc(name)}">
     <input name="new_batch" placeholder="新批次名" style="width:130px">
@@ -9598,12 +9612,29 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
 </div>
 """)
 
+        plan_filter_rows = []
+        for name, count in sorted(plan_counts.items()):
+            name_q = urllib.parse.quote(name)
+            active = " dense-filter-active" if plan_filter == name else ""
+            plan_filter_rows.append(f'<a class="btn dense-filter-btn{active}" href="/admin/vouchers?status={esc(status_filter)}&q={esc(urllib.parse.quote(search_text))}&batch={esc(urllib.parse.quote(batch_filter))}&plan={name_q}">{esc(name)} <b>{count}</b></a>')
+
+        voucher_plan_panel_html = f"""
+<div class="card dense-list-card">
+<h2>套餐筛选</h2>
+<p class="muted">按兑换码生成时保存的套餐名称筛选，可与状态、批次和搜索条件组合。</p>
+<div class="dense-filter-row">
+<a class="btn dense-filter-btn{' dense-filter-active' if plan_filter == 'all' else ''}" href="/admin/vouchers?status={esc(status_filter)}&q={esc(urllib.parse.quote(search_text))}&batch={esc(urllib.parse.quote(batch_filter))}">全部套餐</a>
+{''.join(plan_filter_rows) if plan_filter_rows else '<span class="muted">暂无套餐</span>'}
+</div>
+</div>
+"""
+
         voucher_batch_panel_html = f"""
 <div class="card dense-list-card">
 <h2>兑换码批次</h2>
 <p class="muted">新增或批量生成时可填写批次名；这里按批次快速筛选、打印和改名。新批次名留空提交可清空该批次。</p>
 <div class="dense-filter-row">
-<a class="btn dense-filter-btn{' dense-filter-active' if not batch_filter else ''}" href="/admin/vouchers?status={esc(status_filter)}&q={esc(urllib.parse.quote(search_text))}">全部批次</a>
+<a class="btn dense-filter-btn{' dense-filter-active' if not batch_filter else ''}" href="/admin/vouchers?status={esc(status_filter)}&q={esc(urllib.parse.quote(search_text))}&plan={esc(urllib.parse.quote(plan_filter))}">全部批次</a>
 {''.join(batch_rows) if batch_rows else '<span class="muted">暂无批次</span>'}
 </div>
 </div>
@@ -9627,12 +9658,14 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
 </div>
 
 {voucher_top_tools_html}
+{voucher_plan_panel_html}
 {voucher_batch_panel_html}
 
 <div class="card dense-search-card">
 <form method="get" action="/admin/vouchers" class="dense-search-form">
 <input type="hidden" name="status" value="{esc(status_filter)}">
 <input type="hidden" name="batch" value="{esc(batch_filter)}">
+<input type="hidden" name="plan" value="{esc(plan_filter)}">
 <input name="q" value="{esc(search_text)}" placeholder="搜索兑换码、套餐、备注、状态">
 <button type="submit">搜索</button>
 <a class="btn" href="/admin/vouchers">清空</a>
@@ -9640,7 +9673,7 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
 <div class="dense-filter-row">{filter_buttons}</div>
 <div class="dense-tool-row">
 <a class="btn" href="/admin/export-unused">导出未使用</a>
-<a class="btn" href="/admin/vouchers-print?status={esc(status_filter)}&q={esc(urllib.parse.quote(search_text))}&batch={esc(urllib.parse.quote(batch_filter))}" target="_blank">打印当前筛选列表</a>
+<a class="btn" href="/admin/vouchers-print?status={esc(status_filter)}&q={esc(urllib.parse.quote(search_text))}&batch={esc(urllib.parse.quote(batch_filter))}&plan={esc(urllib.parse.quote(plan_filter))}" target="_blank">打印当前筛选列表</a>
 <form method="post" action="/admin/voucher-delete-expired" onsubmit="return confirm('确认批量删除所有已过期兑换码？永久码和使用中兑换码不会删除。')">
 <button class="danger" type="submit">删除过期</button>
 </form>
@@ -9649,7 +9682,7 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
 
 <div class="card dense-list-card">
 <h2>兑换码列表</h2>
-<p class="muted">筛选：{esc(filter_labels.get(status_filter, "全部"))}；搜索：{esc(search_text or "无")}；当前显示 {shown_count} 条。</p>
+<p class="muted">筛选：{esc(filter_labels.get(status_filter, "全部"))}；套餐：{esc("全部" if plan_filter == "all" else plan_filter)}；批次：{esc(batch_filter or "全部")}；搜索：{esc(search_text or "无")}；当前显示 {shown_count} 条。</p>
 <div class="voucher-bulk-bar-v2">
   <button type="button" class="btn dense-mini-btn" onclick="wpVoucherSelectAllV2(true)">全选</button>
   <button type="button" class="btn dense-mini-btn" onclick="wpVoucherSelectAllV2(false)">取消选择</button>
@@ -9666,6 +9699,53 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
 
   <span class="muted">只处理当前列表中勾选的兑换码</span>
 </div>
+
+<details class="card" style="box-shadow:none;background:#f8fafc;margin:10px 0">
+  <summary><b>批量修改所选兑换码</b></summary>
+  <form method="post" action="/admin/voucher-bulk-update" id="voucherBulkUpdateFormV2" onsubmit="return wpVoucherBulkUpdateConfirmV2()">
+    <input type="hidden" name="codes" id="voucherBulkUpdateCodesV2">
+    <p class="muted">先勾选列表里的兑换码，再勾选下面要修改的字段。未勾选的字段不会改变。</p>
+    <div class="grid">
+      <div>
+        <label><input type="checkbox" name="set_batch" value="1"> 修改批次名</label>
+        <input name="batch_name" placeholder="留空可清空批次">
+      </div>
+      <div>
+        <label><input type="checkbox" name="set_note" value="1"> 修改备注</label>
+        <input name="note" placeholder="留空可清空备注">
+      </div>
+      <div>
+        <label><input type="checkbox" name="set_plan" value="1"> 修改套餐名称</label>
+        <input name="speed_profile_name" placeholder="例如 Day Plan 5M">
+      </div>
+      <div>
+        <label><input type="checkbox" name="set_minutes" value="1"> 修改时长分钟</label>
+        <input name="minutes" type="number" min="0" value="1440">
+      </div>
+      <div>
+        <label><input type="checkbox" name="set_max_devices" value="1"> 修改最大设备数</label>
+        <input name="max_devices" type="number" min="1" value="1">
+      </div>
+      <div>
+        <label><input type="checkbox" name="set_speed" value="1"> 修改上下行限速</label>
+        <input name="download_mbps" value="0" placeholder="下载 Mbps，0 不限速">
+        <input name="upload_mbps" value="0" placeholder="上传 Mbps，0 不限速">
+      </div>
+      <div>
+        <label><input type="checkbox" name="set_enabled" value="1"> 修改启用状态</label>
+        <select name="enabled">
+          <option value="1">启用</option>
+          <option value="0">禁用</option>
+        </select>
+      </div>
+      <div>
+        <label><input type="checkbox" name="apply_expire" value="1"> 按新时长重算已使用兑换码到期时间</label>
+        <p class="muted">只在同时勾选“修改时长分钟”时生效。</p>
+      </div>
+    </div>
+    <p><button type="submit">批量修改所选</button></p>
+  </form>
+</details>
 
 <table class="voucher-dense-table">
 <tr>
@@ -9719,6 +9799,24 @@ function wpVoucherBulkPrintV2() {{
   }}
   document.getElementById('voucherBulkPrintCodesV2').value = codes.join('\\n');
   return true;
+}}
+
+function wpVoucherBulkUpdateConfirmV2() {{
+  var codes = wpVoucherSelectedCodesV2();
+  if (codes.length < 1) {{
+    alert('请先选择要批量修改的兑换码');
+    return false;
+  }}
+
+  var form = document.getElementById('voucherBulkUpdateFormV2');
+  var fields = form.querySelectorAll('input[type="checkbox"][name^="set_"]:checked, input[type="checkbox"][name="apply_expire"]:checked');
+  if (fields.length < 1) {{
+    alert('请至少勾选一个要修改的字段');
+    return false;
+  }}
+
+  document.getElementById('voucherBulkUpdateCodesV2').value = codes.join('\\n');
+  return confirm('确认批量修改所选 ' + codes.length + ' 个兑换码？已绑定设备不会被删除。');
 }}
 </script>
 </div>
@@ -10127,6 +10225,9 @@ function wpVoucherBulkPrintV2() {{
         status_filter = queries.get("status", ["unused"])[0].strip()
         q = queries.get("q", [""])[0].strip().upper()
         batch_filter = queries.get("batch", [""])[0].strip()
+        plan_filter = queries.get("plan", ["all"])[0].strip()
+        if not plan_filter:
+            plan_filter = "all"
         selected_codes = []
         raw_codes = queries.get("codes", [""])[0]
         if raw_codes:
@@ -10140,6 +10241,8 @@ function wpVoucherBulkPrintV2() {{
             if q and q not in code:
                 continue
             if batch_filter and str(voucher.get("batch_name", "") or "").strip() != batch_filter:
+                continue
+            if plan_filter != "all" and str(voucher.get("speed_profile_name", "") or "").strip() != plan_filter:
                 continue
 
             used = bool(voucher.get("first_used_at", 0))
@@ -10549,6 +10652,151 @@ function wpVoucherBulkPrintV2() {{
 </div>
 """
         self.send_html(admin_page("批量删除所选兑换码", body))
+
+    def admin_voucher_bulk_update(self):
+        form = self.read_form()
+        raw_codes = str(form.get("codes", "") or "")
+        codes = []
+        seen = set()
+        for item in raw_codes.replace(",", "\n").splitlines():
+            code = normalize_code(item)
+            if code and code not in seen:
+                seen.add(code)
+                codes.append(code)
+
+        if not codes:
+            self.send_html(admin_page("批量修改失败", "<div class='card'><h1 class='bad'>请先选择要批量修改的兑换码</h1><a class='btn' href='/admin/vouchers'>返回</a></div>"))
+            return
+
+        set_batch = form.get("set_batch", "") == "1"
+        set_note = form.get("set_note", "") == "1"
+        set_plan = form.get("set_plan", "") == "1"
+        set_minutes = form.get("set_minutes", "") == "1"
+        set_max_devices = form.get("set_max_devices", "") == "1"
+        set_speed = form.get("set_speed", "") == "1"
+        set_enabled = form.get("set_enabled", "") == "1"
+        apply_expire = form.get("apply_expire", "") == "1"
+
+        if not any([set_batch, set_note, set_plan, set_minutes, set_max_devices, set_speed, set_enabled]):
+            self.send_html(admin_page("批量修改失败", "<div class='card'><h1 class='bad'>请至少勾选一个要修改的字段</h1><a class='btn' href='/admin/vouchers'>返回</a></div>"))
+            return
+
+        try:
+            minutes = max(0, int(form.get("minutes", "0") or 0))
+        except Exception:
+            minutes = 0
+
+        try:
+            max_devices = max(1, int(form.get("max_devices", "1") or 1))
+        except Exception:
+            max_devices = 1
+
+        download_kbps = mbps_to_kbps(form.get("download_mbps", "0"))
+        upload_kbps = mbps_to_kbps(form.get("upload_mbps", "0"))
+        speed_profile_name = str(form.get("speed_profile_name", "") or "").strip() or "Default Plan"
+        batch_name = str(form.get("batch_name", "") or "").strip()
+        note = str(form.get("note", "") or "").strip()
+        enabled = form.get("enabled", "1") == "1"
+
+        db = load_db()
+        vouchers = db.get("vouchers", {})
+        changed = []
+        missing = []
+        kicked_devices = 0
+
+        try:
+            if "_wp_create_admin_backup" in globals():
+                backup_info = _wp_create_admin_backup("before-voucher-bulk-update")
+                backup_name = backup_info.get("name", "")
+            else:
+                backup_name = create_backup()
+        except Exception:
+            backup_name = ""
+
+        for code in codes:
+            voucher = vouchers.get(code)
+            if not isinstance(voucher, dict):
+                missing.append(code)
+                continue
+
+            old_enabled = bool(voucher.get("enabled", True))
+
+            if set_batch:
+                voucher["batch_name"] = batch_name
+            if set_note:
+                voucher["note"] = note
+            if set_plan:
+                voucher["speed_profile_name"] = speed_profile_name
+            if set_minutes:
+                voucher["minutes"] = minutes
+                if apply_expire:
+                    first_used_at = int(voucher.get("first_used_at", 0) or 0)
+                    if minutes == 0:
+                        voucher["expire_at"] = 0
+                    elif first_used_at > 0:
+                        voucher["expire_at"] = first_used_at + minutes * 60
+                    else:
+                        voucher["expire_at"] = 0
+            if set_max_devices:
+                voucher["max_devices"] = max_devices
+            if set_speed:
+                voucher["download_kbps"] = download_kbps
+                voucher["upload_kbps"] = upload_kbps
+            if set_enabled:
+                voucher["enabled"] = enabled
+                if old_enabled and not enabled:
+                    for mac in list(voucher.get("devices", {}).keys()):
+                        try:
+                            nft_kick_device(mac)
+                        except Exception:
+                            pass
+                        try:
+                            safe_qos_remove_device(mac)
+                        except Exception:
+                            pass
+                        if mac in db.get("devices", {}):
+                            db["devices"][mac]["online"] = False
+                            db["devices"][mac]["last_seen"] = now()
+                        kicked_devices += 1
+
+            if set_speed or set_plan:
+                for mac, bound in voucher.get("devices", {}).items():
+                    if not isinstance(bound, dict):
+                        continue
+                    if set_speed:
+                        bound["download_kbps"] = voucher.get("download_kbps", 0)
+                        bound["upload_kbps"] = voucher.get("upload_kbps", 0)
+                    if set_plan:
+                        bound["speed_profile_name"] = voucher.get("speed_profile_name", "")
+                    device = db.get("devices", {}).get(mac)
+                    if isinstance(device, dict) and normalize_code(device.get("voucher_code", "")) == code:
+                        if set_speed:
+                            device["download_kbps"] = voucher.get("download_kbps", 0)
+                            device["upload_kbps"] = voucher.get("upload_kbps", 0)
+                        if set_plan:
+                            device["speed_profile_name"] = voucher.get("speed_profile_name", "")
+
+            changed.append(code)
+
+        if changed:
+            save_db(db)
+            append_log("VOUCHER", f"批量修改兑换码 {len(changed)} 个，备份 {backup_name}")
+            try:
+                append_admin_audit(self, "批量修改兑换码", f"count={len(changed)} missing={len(missing)} kicked={kicked_devices} backup={backup_name} codes={','.join(changed[:30])}")
+            except Exception:
+                pass
+
+        body = f"""
+<div class="card">
+<h1 class="ok">批量修改完成</h1>
+<p>已修改 <b>{len(changed)}</b> 个兑换码。</p>
+<p>未找到 <b>{len(missing)}</b> 个兑换码。</p>
+<p>处理绑定设备 <b>{kicked_devices}</b> 台。</p>
+<p class="muted">备份：{esc(str(backup_name or ''))}</p>
+<p><a class="btn" href="/admin/vouchers">返回兑换码管理</a></p>
+</div>
+"""
+        self.send_html(admin_page("批量修改兑换码", body))
 
     def admin_voucher_delete(self):
         form = self.read_form()

@@ -101,6 +101,7 @@ wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwr
 - 启用、禁用、删除兑换码
 - 延长时间、重置使用状态
 - 查看兑换码绑定设备和使用日志
+- 勾选兑换码后批量修改批次、备注、套餐名、时长、设备数、限速和启用状态
 - 导出未使用兑换码 CSV，包含批次名
 - 打印当前筛选兑换码、当前批次或勾选的兑换码
 
