@@ -4020,7 +4020,7 @@ def print_vouchers_page(vouchers, lan_ip, portal_title="WiFi Access"):
     </div>
   </div>
   <div class="card-footer">
-    Step 1: Scan the QR code or visit http://{esc(lan_ip)}. Step 2: Enter the voucher code above. Step 3: Connect and keep this card for reference.
+    Step 1: Connect to the venue WiFi network. Step 2: Scan the QR code or visit http://{esc(lan_ip)}. Step 3: Enter the voucher code above and keep this card for reference.
   </div>
 </div>
 """)
@@ -4176,7 +4176,7 @@ body {{
     <h2 style="margin:0 0 5px;font-size:18px">打印预览</h2>
     <div style="font-size:13px;color:#64748b;line-height:1.55">
       <div>系统已准备好 {len(vouchers)} 张兑换码卡片，建议使用 A4 纸张打印。</div>
-      <div><b>第一步：</b>先检查下方卡片的兑换码、有效期、套餐和设备数量是否正确。</div>
+      <div><b>第一步：</b>先检查下方卡片的兑换码、有效期、套餐和设备数量是否正确，并确认顾客知道要连接现场提供的 WiFi。</div>
       <div><b>第二步：</b>点击“立即打印”，纸张选择 A4，缩放保持 100% 或浏览器默认值。</div>
       <div><b>第三步：</b>建议先打印 1 页测试，对齐正常后再打印剩余页面。</div>
     </div>
@@ -4186,9 +4186,9 @@ body {{
 <div class="print-only print-steps">
   <h2>How to Use This Voucher</h2>
   <ol>
-    <li>Connect your phone, tablet, or computer to the WiFi network.</li>
-    <li>Scan the QR code on a voucher card, or open http://{esc(lan_ip)} in a browser.</li>
-    <li>Enter the voucher code exactly as printed on the card.</li>
+    <li>Connect your phone, tablet, or computer to the WiFi network provided by this venue. If you do not know the WiFi name, ask the staff.</li>
+    <li>After joining that WiFi network, scan the QR code on a voucher card, or open http://{esc(lan_ip)} in a browser.</li>
+    <li>Enter the voucher code exactly as printed on the card, then submit it to connect to the Internet.</li>
     <li>Keep the card until the session expires, because it shows the plan duration and device limit.</li>
   </ol>
 </div>
