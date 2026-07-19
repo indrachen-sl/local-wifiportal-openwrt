@@ -288,4 +288,4 @@ uci show uhttpd
 
 默认密码 `admin123456` 方便首次部署。正式使用时建议登录后台后到 `/admin/password` 修改为更强密码。
 
-不要把真实生产环境的 `/etc/wifiportal/vouchers.json`、`/etc/wifiportal/settings.json`、备份文件或日志上传到公开仓库。
+
