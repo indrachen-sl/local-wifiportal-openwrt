@@ -9557,12 +9557,12 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
 
 <tr>
 <td class="voucher-tools-title-cell">
-  <b>打印兑换码卡片</b>
-  <div class="dense-sub">生成排版好的打印卡片</div>
+  <b>打印蓝牙标签</b>
+  <div class="dense-sub">生成 15mm*36.5mm 标签：上方 WiFi 名称，下方兑换码</div>
 </td>
 <td>
   <a class="btn dense-mini-btn dense-good" href="/admin/vouchers-print" target="_blank">批量打印未使用兑换码</a>
-  <span class="dense-sub">自动生成一键登录二维码</span>
+  <span class="dense-sub">适合蓝牙标签打印机</span>
 </td>
 </tr>
 
