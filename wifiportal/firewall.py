@@ -22,13 +22,12 @@ _nft_table_initialized = False
 
 def check_nft_table_exists():
     global _nft_table_initialized
-    if _nft_table_initialized:
-        return True
     code, out, err = run_command(["/usr/sbin/nft", "list", "table", "inet", "wifiportal"])
-    if code == 0:
-        _nft_table_initialized = True
-        return True
-    return False
+    _nft_table_initialized = code == 0
+    return _nft_table_initialized
+
+def firewall_enabled():
+    return load_settings().get("firewall", {}).get("enabled", True) is not False
 
 def nft_available():
     code, out, err = run_command(["/usr/sbin/nft", "--version"])
@@ -41,10 +40,12 @@ def nft_delete_table():
 
 def nft_init_table():
     global _nft_table_initialized
+    if not firewall_enabled():
+        return False, "firewall disabled by administrator"
     if not nft_available():
         return False, "nftables not available"
-
-    nft_delete_table()
+    if check_nft_table_exists():
+        return True, "firewall already initialized"
 
     rules = f"""
 table inet wifiportal {{
@@ -176,10 +177,21 @@ def restore_firewall_sessions():
         if not device.get("online"):
             continue
         if device.get("voucher_code") == "WHITELIST":
-            nft_add_whitelist(mac)
+            if mac in db.get("whitelist", {}):
+                nft_add_whitelist(mac)
             continue
 
-        expire_at = int(device.get("expire_at", 0) or 0)
+        code = device.get("voucher_code", "")
+        voucher = db.get("vouchers", {}).get(code)
+        if not isinstance(voucher, dict) or not voucher.get("enabled", True):
+            continue
+        if mac not in voucher.get("devices", {}):
+            continue
+        voucher_expire = int(voucher.get("expire_at", 0) or 0)
+        if voucher_expire > 0 and voucher_expire <= t:
+            continue
+
+        expire_at = voucher_expire
         if expire_at == 0:
             nft_allow_device(mac, 0)
         elif expire_at > t:
@@ -401,11 +413,13 @@ def qos_apply_device(mac, ip_addr, download_kbps, upload_kbps):
     tc = qos_tc()
     cid = str(qos_class_id(mac))
     prio = str(qos_prio_id(mac))
+    success = True
 
     if download_kbps > 0:
         rate = qos_rate(download_kbps)
         code, out, err = qos_run([tc, "class", "replace", "dev", LAN_IF, "parent", "1:1", "classid", f"1:{cid}", "htb", "rate", rate, "ceil", rate])
         if code != 0:
+            success = False
             append_log("QOS", f"下载 class 创建失败：{err}", mac=mac, ip=ip_addr, result="FAIL")
         code, out, err = qos_run([
             tc, "filter", "replace", "dev", LAN_IF,
@@ -414,12 +428,14 @@ def qos_apply_device(mac, ip_addr, download_kbps, upload_kbps):
             "flowid", f"1:{cid}"
         ])
         if code != 0:
+            success = False
             append_log("QOS", f"下载 filter 创建失败：{err}", mac=mac, ip=ip_addr, result="FAIL")
 
     if upload_kbps > 0:
         rate = qos_rate(upload_kbps)
         code, out, err = qos_run([tc, "class", "replace", "dev", QOS_IFB, "parent", "1:1", "classid", f"1:{cid}", "htb", "rate", rate, "ceil", rate])
         if code != 0:
+            success = False
             append_log("QOS", f"上传 class 创建失败：{err}", mac=mac, ip=ip_addr, result="FAIL")
         code, out, err = qos_run([
             tc, "filter", "replace", "dev", QOS_IFB,
@@ -428,10 +444,12 @@ def qos_apply_device(mac, ip_addr, download_kbps, upload_kbps):
             "flowid", f"1:{cid}"
         ])
         if code != 0:
+            success = False
             append_log("QOS", f"上传 filter 创建失败：{err}", mac=mac, ip=ip_addr, result="FAIL")
 
-    append_log("QOS", f"应用限速 {ip_addr} {download_kbps}k/{upload_kbps}k", mac=mac, ip=ip_addr)
-    return True
+    if success:
+        append_log("QOS", f"应用限速 {ip_addr} {download_kbps}k/{upload_kbps}k", mac=mac, ip=ip_addr)
+    return success
 
 def qos_restore_sessions():
     if not qos_enabled():
@@ -444,6 +462,10 @@ def qos_restore_sessions():
             continue
         if device.get("voucher_code") == "WHITELIST":
             safe_qos_remove_device(mac)
+            continue
+
+        voucher = db.get("vouchers", {}).get(device.get("voucher_code", ""))
+        if not isinstance(voucher, dict) or not voucher.get("enabled", True) or mac not in voucher.get("devices", {}):
             continue
 
         expire_at = int(device.get("expire_at", 0) or 0)

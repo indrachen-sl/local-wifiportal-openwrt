@@ -1,7 +1,7 @@
 from wifiportal.config import CONFIG_FILE, CONFIG, LAN_IP, LAN_IF, WAN_IF, PORTAL_PORT, DB_FILE, SETTINGS_FILE, LOG_FILE, SESSION_SECRET, QOS_IFB
 from wifiportal.utils import now, esc, format_time, kbps_to_mbps, format_duration, normalize_mac
-from wifiportal.db import load_json, save_json, load_settings, save_settings, load_db, save_db, append_log, create_backup, list_backups, cleanup_old_backups, restore_backup_file
-from wifiportal.firewall import run_command, check_nft_table_exists, nft_available, nft_delete_table, nft_init_table, nft_add_element, nft_delete_element, nft_allow_device, nft_kick_device, nft_add_whitelist, nft_delete_whitelist, nft_add_blacklist, nft_delete_blacklist, restore_firewall_sessions, cleanup_expired_and_firewall, firewall_status_text, auto_backup_if_needed, qos_enabled, qos_tc, qos_ip, qos_class_id, qos_prio_id, qos_rate, qos_run, qos_clear, qos_init, qos_remove_device, qos_apply_device, qos_restore_sessions, qos_status_text, safe_qos_apply_device, safe_qos_remove_device
+from wifiportal.db import load_json, save_json, load_settings, save_settings, load_db, save_db, append_log, create_backup, list_backups, cleanup_old_backups, restore_backup_file, db_transaction
+from wifiportal.firewall import run_command, check_nft_table_exists, firewall_enabled, nft_available, nft_delete_table, nft_init_table, nft_add_element, nft_delete_element, nft_allow_device, nft_kick_device, nft_add_whitelist, nft_delete_whitelist, nft_add_blacklist, nft_delete_blacklist, restore_firewall_sessions, cleanup_expired_and_firewall, firewall_status_text, auto_backup_if_needed, qos_enabled, qos_tc, qos_ip, qos_class_id, qos_prio_id, qos_rate, qos_run, qos_clear, qos_init, qos_remove_device, qos_apply_device, qos_restore_sessions, qos_status_text, safe_qos_apply_device, safe_qos_remove_device
 from wifiportal.templates import admin_page, _wp_customer_page_polished, _wp_customer_v2_page, print_vouchers_page
 
 #!/usr/bin/env python3
@@ -381,6 +381,7 @@ def verify_admin_password(password):
 
 
 def update_admin_password(new_password):
+    global SESSION_SECRET
     if len(new_password) < 8:
         return False, "新密码至少需要 8 位"
     settings = load_settings()
@@ -390,6 +391,7 @@ def update_admin_password(new_password):
     settings["admin"]["password_hash"] = password_hash(new_password, salt)
     settings["admin"]["session_secret"] = secrets.token_hex(32)
     save_settings(settings)
+    SESSION_SECRET = settings["admin"]["session_secret"]
     append_log("ADMIN", "后台密码已修改")
     return True, "后台密码已修改，请重新登录"
 
@@ -4436,6 +4438,51 @@ def create_voucher_record(code, minutes, max_devices, download_mbps, upload_mbps
     }
 
 
+def sync_voucher_devices(db, code, voucher, expiry=False, speed=False, plan=False):
+    bound = voucher.get("devices", {})
+    top_devices = db.get("devices", {})
+    changed = []
+    for mac in set(bound) | {mac for mac, device in top_devices.items()
+                              if isinstance(device, dict) and normalize_code(device.get("voucher_code", "")) == code}:
+        records = []
+        if isinstance(bound.get(mac), dict):
+            records.append(bound[mac])
+        top = top_devices.get(mac)
+        if isinstance(top, dict) and normalize_code(top.get("voucher_code", "")) == code:
+            if all(top is not record for record in records):
+                records.append(top)
+        if not records:
+            continue
+        for record in records:
+            if expiry:
+                record["expire_at"] = int(voucher.get("expire_at", 0) or 0)
+            if not voucher.get("enabled", True) or (int(voucher.get("expire_at", 0) or 0) > 0 and int(voucher.get("expire_at", 0) or 0) <= now()):
+                record["online"] = False
+            if speed:
+                record["download_kbps"] = int(voucher.get("download_kbps", 0) or 0)
+                record["upload_kbps"] = int(voucher.get("upload_kbps", 0) or 0)
+                record["download_mbps"] = kbps_to_mbps(record["download_kbps"])
+                record["upload_mbps"] = kbps_to_mbps(record["upload_kbps"])
+            if plan:
+                record["speed_profile_name"] = voucher.get("speed_profile_name", "")
+        changed.append((mac, top if isinstance(top, dict) and any(top is record for record in records) else records[0]))
+    return changed
+
+
+def apply_voucher_live_rules(voucher, devices, expiry=False, speed=False):
+    expires = int(voucher.get("expire_at", 0) or 0)
+    blocked = not voucher.get("enabled", True) or (expires > 0 and expires <= now())
+    for mac, device in devices:
+        if blocked:
+            nft_kick_device(mac)
+            safe_qos_remove_device(mac)
+        elif device.get("online"):
+            if expiry and check_nft_table_exists():
+                nft_allow_device(mac, max(0, expires - now()) if expires else 0)
+            if speed:
+                safe_qos_apply_device(mac, device.get("ip", ""), voucher.get("download_kbps", 0), voucher.get("upload_kbps", 0))
+
+
 
 
 
@@ -4860,7 +4907,8 @@ def authenticate_voucher(code, client_ip):
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         except Exception:
             pass
-        return _authenticate_voucher_inner(code, client_ip)
+        with db_transaction():
+            return _authenticate_voucher_inner(code, client_ip)
     finally:
         try:
             if lock_file is not None:
@@ -5197,6 +5245,11 @@ def _authenticate_voucher_inner(code, client_ip):
     latest_voucher["expire_at"] = voucher.get("expire_at", expire_at)
 
     save_db(latest_db)
+    if not firewall_enabled():
+        safe_qos_apply_device(mac, client_ip, voucher.get("download_kbps", 0), voucher.get("upload_kbps", 0))
+        clear_security_success(mac, client_ip)
+        append_log("AUTH", "认证成功（认证拦截已关闭）", voucher_code=code, mac=mac, ip=client_ip)
+        return True, "Authentication successful. You are now connected.", mac, hostname, remaining_seconds
 
     ok_fw, fw_msg = nft_init_table()
     if not ok_fw:
@@ -5985,6 +6038,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/admin/api/devices-realtime"):
+            if not self.require_admin():
+                return
             self.admin_devices_realtime_api()
             return
         parsed = urllib.parse.urlparse(self.path)
@@ -6010,11 +6065,15 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
 
         if path == "/auth":
-            self.show_auth_placeholder()
+            self.read_form()
+            with db_transaction():
+                self.show_auth_placeholder()
             return
 
         if path.startswith("/admin"):
-            self.handle_admin_post(path)
+            self.read_form()
+            with db_transaction():
+                self.handle_admin_post(path)
             return
 
         self.send_html(customer_page("Not Found", "<div class='card'><h1>Not Found</h1></div>"), 404)
@@ -8829,6 +8888,9 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
         self.send_html(admin_page("防火墙认证拦截", body))
 
     def admin_firewall_enable(self):
+        settings = load_settings()
+        settings.setdefault("firewall", {})["enabled"] = True
+        save_settings(settings)
         ok, message = nft_init_table()
         if ok:
             restore_firewall_sessions()
@@ -8836,12 +8898,23 @@ setTimeout(function(){ location.href='/admin'; }, 7000);
             append_admin_audit(self, "启用认证拦截")
             self.send_html(admin_page("已启用", f"<div class='card'><h1 class='ok'>认证拦截已启用</h1><p>{esc(message)}</p><a class='btn' href='/admin/firewall'>返回</a></div>"))
         else:
+            settings["firewall"]["enabled"] = False
+            save_settings(settings)
             append_log("FIREWALL", f"启用认证拦截失败：{message}", result="FAIL")
             append_admin_audit(self, "启用认证拦截失败", message, result="FAIL")
             self.send_html(admin_page("启用失败", f"<div class='card'><h1 class='bad'>启用失败</h1><p>{esc(message)}</p><a class='btn' href='/admin/firewall'>返回</a></div>"))
 
     def admin_firewall_disable(self):
+        settings = load_settings()
+        settings.setdefault("firewall", {})["enabled"] = False
+        save_settings(settings)
         nft_delete_table()
+        if check_nft_table_exists():
+            settings["firewall"]["enabled"] = True
+            save_settings(settings)
+            append_log("FIREWALL", "关闭认证拦截失败：nftables 表仍存在", result="FAIL")
+            self.send_html(admin_page("关闭失败", "<div class='card'><h1 class='bad'>认证拦截未关闭</h1><p>nftables 表仍存在，请检查系统日志。</p><a class='btn' href='/admin/firewall'>返回</a></div>"), 500)
+            return
         append_log("FIREWALL", "管理员关闭认证拦截")
         append_admin_audit(self, "关闭认证拦截")
         self.send_html(admin_page("已关闭", "<div class='card'><h1 class='ok'>认证拦截已关闭</h1><p>所有设备恢复正常转发。</p><a class='btn' href='/admin/firewall'>返回</a></div>"))
@@ -10088,7 +10161,8 @@ function wpVoucherBulkUpdateConfirmV2() {{
             self.send_html(admin_page("保存失败", "<div class='card'><h1 class='bad'>兑换码不存在</h1><a class='btn' href='/admin/vouchers'>返回兑换码管理</a></div>"))
             return
 
-        old_enabled = bool(voucher.get("enabled", True))
+        old_minutes = int(voucher.get("minutes", 0) or 0)
+        old_max_devices = int(voucher.get("max_devices", 1) or 1)
 
         try:
             minutes = max(0, int(form.get("minutes", voucher.get("minutes", 0)) or 0))
@@ -10115,7 +10189,8 @@ function wpVoucherBulkUpdateConfirmV2() {{
         voucher["note"] = note
         voucher["enabled"] = enabled
 
-        if apply_expire:
+        recalculate_expire = apply_expire or (old_minutes == 0) != (minutes == 0)
+        if recalculate_expire:
             first_used_at = int(voucher.get("first_used_at", 0) or 0)
             if minutes == 0:
                 voucher["expire_at"] = 0
@@ -10124,33 +10199,11 @@ function wpVoucherBulkUpdateConfirmV2() {{
             else:
                 voucher["expire_at"] = 0
 
-        bound_macs = set((voucher.get("devices", {}) or {}).keys())
-
-        for mac, device in db.get("devices", {}).items():
-            if normalize_code(device.get("voucher_code", "")) == code:
-                bound_macs.add(mac)
-
-        for mac in list(bound_macs):
-            device = db.get("devices", {}).get(mac)
-            if not device:
-                continue
-
-            device["download_kbps"] = download_kbps
-            device["upload_kbps"] = upload_kbps
-            device["speed_profile_name"] = speed_profile_name
-
-            if apply_expire:
-                device["expire_at"] = int(voucher.get("expire_at", 0) or 0)
-
-        if old_enabled and not enabled:
-            for mac in list(bound_macs):
-                nft_kick_device(mac)
-                safe_qos_remove_device(mac)
-                if mac in db.get("devices", {}):
-                    db["devices"][mac]["online"] = False
-                    db["devices"][mac]["last_seen"] = now()
-
+        live_devices = sync_voucher_devices(db, code, voucher, expiry=recalculate_expire, speed=True, plan=True)
+        if max_devices < old_max_devices:
+            _wp_enforce_voucher_device_limit(db, code, "", "admin_reduced_device_limit")
         save_db(db)
+        apply_voucher_live_rules(voucher, live_devices, expiry=recalculate_expire, speed=True)
         append_log("VOUCHER", f"编辑兑换码 {code}", voucher_code=code)
         append_admin_audit(self, "编辑兑换码", f"code={code} minutes={minutes} max_devices={max_devices} down={download_kbps}kbps up={upload_kbps}kbps enabled={enabled}", voucher_code=code)
 
@@ -10250,10 +10303,9 @@ function wpVoucherBulkUpdateConfirmV2() {{
             expired = False
             
             # calculate expired
-            if not used:
-                expire_at = int(voucher.get("expire_at", 0) or 0)
-                if expire_at > 0 and expire_at <= now():
-                    expired = True
+            expire_at = int(voucher.get("expire_at", 0) or 0)
+            if expire_at > 0 and expire_at <= now():
+                expired = True
 
             if selected_codes:
                 pass
@@ -10533,10 +10585,18 @@ function wpVoucherBulkUpdateConfirmV2() {{
         db = load_db()
         voucher = db.get("vouchers", {}).get(code)
         if voucher and int(voucher.get("minutes", 0)) != 0:
-            current_expire = int(voucher.get("expire_at", 0))
-            base = max(now(), current_expire)
-            voucher["expire_at"] = base + add_minutes * 60
+            first_used_at = int(voucher.get("first_used_at", 0) or 0)
+            if first_used_at > 0:
+                current_expire = int(voucher.get("expire_at", 0) or 0)
+                base = max(now(), current_expire)
+                voucher["expire_at"] = base + add_minutes * 60
+                voucher["minutes"] = (voucher["expire_at"] - first_used_at + 59) // 60
+            else:
+                voucher["minutes"] = int(voucher.get("minutes", 0) or 0) + add_minutes
+                voucher["expire_at"] = 0
+            live_devices = sync_voucher_devices(db, code, voucher, expiry=True)
             save_db(db)
+            apply_voucher_live_rules(voucher, live_devices, expiry=True)
             append_log("VOUCHER", f"兑换码 {code} 延长 {add_minutes} 分钟", voucher_code=code)
             append_admin_audit(self, "延长兑换码", f"code={code} add_minutes={add_minutes}", voucher_code=code)
         self.redirect("/admin/vouchers")
@@ -10703,6 +10763,7 @@ function wpVoucherBulkUpdateConfirmV2() {{
         changed = []
         missing = []
         kicked_devices = 0
+        live_rules = []
 
         try:
             if "_wp_create_admin_backup" in globals():
@@ -10710,8 +10771,9 @@ function wpVoucherBulkUpdateConfirmV2() {{
                 backup_name = backup_info.get("name", "")
             else:
                 backup_name = create_backup()
-        except Exception:
-            backup_name = ""
+        except Exception as error:
+            self.send_html(admin_page("批量修改失败", f"<div class='card'><h1 class='bad'>创建安全备份失败</h1><p>{esc(str(error))}</p><a class='btn' href='/admin/vouchers'>返回</a></div>"), 500)
+            return
 
         for code in codes:
             voucher = vouchers.get(code)
@@ -10720,6 +10782,9 @@ function wpVoucherBulkUpdateConfirmV2() {{
                 continue
 
             old_enabled = bool(voucher.get("enabled", True))
+            old_minutes = int(voucher.get("minutes", 0) or 0)
+            old_max_devices = int(voucher.get("max_devices", 1) or 1)
+            recalculate_expire = set_minutes and (apply_expire or (old_minutes == 0) != (minutes == 0))
 
             if set_batch:
                 voucher["batch_name"] = batch_name
@@ -10729,7 +10794,7 @@ function wpVoucherBulkUpdateConfirmV2() {{
                 voucher["speed_profile_name"] = speed_profile_name
             if set_minutes:
                 voucher["minutes"] = minutes
-                if apply_expire:
+                if recalculate_expire:
                     first_used_at = int(voucher.get("first_used_at", 0) or 0)
                     if minutes == 0:
                         voucher["expire_at"] = 0
@@ -10744,42 +10809,20 @@ function wpVoucherBulkUpdateConfirmV2() {{
                 voucher["upload_kbps"] = upload_kbps
             if set_enabled:
                 voucher["enabled"] = enabled
-                if old_enabled and not enabled:
-                    for mac in list(voucher.get("devices", {}).keys()):
-                        try:
-                            nft_kick_device(mac)
-                        except Exception:
-                            pass
-                        try:
-                            safe_qos_remove_device(mac)
-                        except Exception:
-                            pass
-                        if mac in db.get("devices", {}):
-                            db["devices"][mac]["online"] = False
-                            db["devices"][mac]["last_seen"] = now()
-                        kicked_devices += 1
-
-            if set_speed or set_plan:
-                for mac, bound in voucher.get("devices", {}).items():
-                    if not isinstance(bound, dict):
-                        continue
-                    if set_speed:
-                        bound["download_kbps"] = voucher.get("download_kbps", 0)
-                        bound["upload_kbps"] = voucher.get("upload_kbps", 0)
-                    if set_plan:
-                        bound["speed_profile_name"] = voucher.get("speed_profile_name", "")
-                    device = db.get("devices", {}).get(mac)
-                    if isinstance(device, dict) and normalize_code(device.get("voucher_code", "")) == code:
-                        if set_speed:
-                            device["download_kbps"] = voucher.get("download_kbps", 0)
-                            device["upload_kbps"] = voucher.get("upload_kbps", 0)
-                        if set_plan:
-                            device["speed_profile_name"] = voucher.get("speed_profile_name", "")
+            live_devices = sync_voucher_devices(db, code, voucher, expiry=recalculate_expire, speed=set_speed, plan=set_plan)
+            if set_max_devices and max_devices < old_max_devices:
+                removed = _wp_enforce_voucher_device_limit(db, code, "", "admin_reduced_device_limit")
+                kicked_devices += len(removed)
+            if set_enabled and old_enabled and not enabled:
+                kicked_devices += len(live_devices)
+            live_rules.append((voucher, live_devices, recalculate_expire, set_speed))
 
             changed.append(code)
 
         if changed:
             save_db(db)
+            for voucher, live_devices, recalculate_expire, update_speed in live_rules:
+                apply_voucher_live_rules(voucher, live_devices, expiry=recalculate_expire, speed=update_speed)
             append_log("VOUCHER", f"批量修改兑换码 {len(changed)} 个，备份 {backup_name}")
             try:
                 append_admin_audit(self, "批量修改兑换码", f"count={len(changed)} missing={len(missing)} kicked={kicked_devices} backup={backup_name} codes={','.join(changed[:30])}")
@@ -11408,8 +11451,14 @@ function wpVoucherBulkUpdateConfirmV2() {{
         db = load_db()
         if mac in db.get("whitelist", {}):
             del db["whitelist"][mac]
+            device = db.get("devices", {}).get(mac)
+            if isinstance(device, dict) and device.get("voucher_code") == "WHITELIST":
+                device["online"] = False
+                device["last_seen"] = now()
             save_db(db)
             nft_delete_whitelist(mac)
+            nft_kick_device(mac)
+            safe_qos_remove_device(mac)
             append_log("WHITELIST", f"删除白名单 {mac}", mac=mac)
         self.redirect("/admin/whitelist")
 
@@ -13287,6 +13336,9 @@ class QuietThreadingHTTPServer(ThreadingHTTPServer):
 
 def _wp_startup_network_restore_background():
     try:
+        if not firewall_enabled():
+            print("WiFi Portal firewall remains disabled by administrator", flush=True)
+            return
         ok, message = nft_init_table()
         if ok:
             restore_firewall_sessions()
@@ -13313,7 +13365,8 @@ def _wp_startup_network_restore_background():
 def background_worker():
     while True:
         try:
-            cleanup_expired_and_firewall()
+            with db_transaction():
+                cleanup_expired_and_firewall()
             auto_backup_if_needed()
         except Exception as error:
             try:
@@ -14032,18 +14085,28 @@ def _wp_create_admin_backup(reason="manual"):
     backup_dir = _wp_backup_dir()
     os.makedirs(backup_dir, exist_ok=True)
 
-    stamp = time.strftime("%Y%m%d-%H%M%S")
+    stamp = time.strftime("%Y%m%d-%H%M%S") + "-" + str(time.time_ns() % 1000000000)
     name = "wifiportal-backup-" + stamp + ".tar.gz"
     out_path = os.path.join(backup_dir, name)
     tmp_path = out_path + ".tmp"
 
     files = [
+        ("/usr/bin/wifiportal_launcher.py", "wifiportal_launcher.py"),
         ("/usr/lib/wifiportal/wifiportal.py", "wifiportal.py"),
+        ("/usr/lib/wifiportal/__init__.py", "modules/__init__.py"),
+        ("/usr/lib/wifiportal/config.py", "modules/config.py"),
+        ("/usr/lib/wifiportal/db.py", "modules/db.py"),
+        ("/usr/lib/wifiportal/firewall.py", "modules/firewall.py"),
+        ("/usr/lib/wifiportal/server.py", "modules/server.py"),
+        ("/usr/lib/wifiportal/templates.py", "modules/templates.py"),
+        ("/usr/lib/wifiportal/utils.py", "modules/utils.py"),
+        ("/etc/wifiportal/config", "wifiportal-config"),
         ("/etc/wifiportal/vouchers.json", "vouchers.json"),
         ("/etc/wifiportal/settings.json", "settings.json"),
         ("/etc/config/network", "openwrt-network"),
         ("/etc/config/firewall", "openwrt-firewall"),
         ("/etc/config/dhcp", "openwrt-dhcp"),
+        ("/etc/config/uhttpd", "openwrt-uhttpd"),
         ("/etc/init.d/wifiportal", "init.d-wifiportal"),
     ]
 
@@ -14068,6 +14131,7 @@ def _wp_create_admin_backup(reason="manual"):
                 tar.add(src, arcname=arc)
 
     os.rename(tmp_path, out_path)
+    os.chmod(out_path, 0o600)
 
     append_log("BACKUP", "创建后台备份 " + name)
     try:
@@ -14117,7 +14181,7 @@ def _wp_restore_admin_backup(name):
 
     restore_safety = _wp_create_admin_backup("before-restore-" + safe)
 
-    tmp_dir = "/tmp/wifiportal-restore-" + str(int(time.time()))
+    tmp_dir = "/tmp/wifiportal-restore-" + str(time.time_ns())
     os.makedirs(tmp_dir, exist_ok=True)
 
     try:
@@ -14129,12 +14193,22 @@ def _wp_restore_admin_backup(name):
             tar.extractall(tmp_dir)
 
         mapping = [
+            ("wifiportal_launcher.py", "/usr/bin/wifiportal_launcher.py"),
             ("wifiportal.py", "/usr/lib/wifiportal/wifiportal.py"),
+            ("modules/__init__.py", "/usr/lib/wifiportal/__init__.py"),
+            ("modules/config.py", "/usr/lib/wifiportal/config.py"),
+            ("modules/db.py", "/usr/lib/wifiportal/db.py"),
+            ("modules/firewall.py", "/usr/lib/wifiportal/firewall.py"),
+            ("modules/server.py", "/usr/lib/wifiportal/server.py"),
+            ("modules/templates.py", "/usr/lib/wifiportal/templates.py"),
+            ("modules/utils.py", "/usr/lib/wifiportal/utils.py"),
+            ("wifiportal-config", "/etc/wifiportal/config"),
             ("vouchers.json", "/etc/wifiportal/vouchers.json"),
             ("settings.json", "/etc/wifiportal/settings.json"),
             ("openwrt-network", "/etc/config/network"),
             ("openwrt-firewall", "/etc/config/firewall"),
             ("openwrt-dhcp", "/etc/config/dhcp"),
+            ("openwrt-uhttpd", "/etc/config/uhttpd"),
             ("init.d-wifiportal", "/etc/init.d/wifiportal"),
         ]
 
@@ -14147,6 +14221,9 @@ def _wp_restore_admin_backup(name):
             shutil.copyfile(src_path, dst_tmp)
             os.rename(dst_tmp, dst)
             restored.append(dst)
+
+        if "/etc/wifiportal/vouchers.json" in restored:
+            shutil.copy2("/etc/wifiportal/vouchers.json", "/etc/wifiportal/vouchers.json.last-good")
 
         append_log("BACKUP", "恢复后台备份 " + safe)
         return {
@@ -14672,7 +14749,16 @@ def _wp_voucher_tools_delete_expired_unused():
         del vouchers[code]
         deleted.append(code)
 
-    save_db(db)
+    if deleted:
+        backup_path = str(backup.get("path") or backup.get("db") or "") if isinstance(backup, dict) else ""
+        if not os.path.isfile(backup_path):
+            raise RuntimeError("安全备份失败，未删除兑换码")
+        if backup_path.endswith(".tar.gz"):
+            import tarfile
+            with tarfile.open(backup_path, "r:gz") as archive:
+                if "vouchers.json" not in archive.getnames():
+                    raise RuntimeError("备份缺少兑换码数据库，未删除兑换码")
+    save_db(db, allow_shrink=bool(deleted))
 
     if deleted:
         append_log("VOUCHER", "批量删除过期兑换码 " + str(len(deleted)) + " 个")

@@ -258,12 +258,26 @@ echo "正在启动 WiFiPortal 服务并设置开机自启..."
 /etc/init.d/wifiportal enable
 /etc/init.d/wifiportal restart
 
-# 7. 设置默认后台管理员密码
+# 7. 仅首次安装时设置默认后台管理员密码
 echo ""
 echo "============================================="
-echo "🎁 部署成功！正在设置默认后台管理密码..."
+echo "🎁 部署成功！正在检查后台管理密码..."
 echo "============================================="
-python3 -c "import sys; sys.path.append('/usr/lib'); from wifiportal.server import update_admin_password; ok, msg = update_admin_password('admin123456'); print('✅ 后台密码已成功设置为: admin123456' if ok else '❌ 设置失败: ' + msg)"
+python3 - <<'PY'
+import sys
+sys.path.insert(0, '/usr/lib')
+from wifiportal.db import load_settings
+from wifiportal.server import update_admin_password
+
+admin = load_settings().get('admin', {})
+if admin.get('password_salt') and admin.get('password_hash'):
+    print('✅ 已保留现有后台管理密码。')
+else:
+    ok, message = update_admin_password('admin123456')
+    if not ok:
+        raise SystemExit('❌ 设置默认密码失败: ' + message)
+    print('✅ 首次安装后台密码: admin123456')
+PY
 
 echo ""
 echo "正在执行部署后自检..."
@@ -313,7 +327,7 @@ echo "---------------------------------------------"
 echo "部署完成！您可以通过以下方式访问后台："
 echo "👉 后台地址: http://192.168.10.1/admin"
 echo "👉 后台账号: admin"
-echo "👉 后台密码: admin123456"
+echo "👉 后台密码: 首次安装为 admin123456；更新时保留现有密码"
 echo "👉 诊断页面: http://192.168.10.1/admin/diagnostics"
 echo "👉 SSH 诊断命令: wifiportal-diagnose"
 echo "👉 SSH 回滚命令: wifiportal-rollback <备份包路径>"

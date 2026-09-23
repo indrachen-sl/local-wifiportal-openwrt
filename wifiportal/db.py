@@ -2,8 +2,46 @@ import os
 import shutil
 import time
 import json
+import threading
+from contextlib import contextmanager
 from wifiportal.config import DB_FILE, SETTINGS_FILE
 from wifiportal.utils import now
+
+_transaction_lock = threading.RLock()
+_transaction_state = threading.local()
+
+
+@contextmanager
+def db_transaction():
+    with _transaction_lock:
+        depth = getattr(_transaction_state, "depth", 0)
+        if depth:
+            _transaction_state.depth = depth + 1
+            try:
+                yield
+            finally:
+                _transaction_state.depth -= 1
+            return
+
+        lock_file = open(DB_FILE + ".transaction.lock", "a+")
+        try:
+            try:
+                import fcntl
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            except ImportError:
+                pass
+            _transaction_state.depth = 1
+            try:
+                yield
+            finally:
+                _transaction_state.depth = 0
+        finally:
+            try:
+                import fcntl
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            except ImportError:
+                pass
+            lock_file.close()
 
 def load_json(path, default):
     try:
@@ -115,9 +153,6 @@ def _wp_restore_db_from_known_good(reason=""):
 
     best_path = ""
     best_db = None
-    best_vouchers = -1
-    best_devices = -1
-
     for candidate in candidates:
         if not os.path.exists(candidate):
             continue
@@ -126,15 +161,17 @@ def _wp_restore_db_from_known_good(reason=""):
             voucher_count = _wp_db_voucher_count(candidate_db)
             device_count = _wp_db_device_count(candidate_db)
 
-            if voucher_count > best_vouchers:
-                best_path = candidate
-                best_db = candidate_db
-                best_vouchers = voucher_count
-                best_devices = device_count
+            if not isinstance(candidate_db, dict) or not isinstance(candidate_db.get("vouchers"), dict):
+                continue
+            best_path = candidate
+            best_db = candidate_db
+            best_vouchers = voucher_count
+            best_devices = device_count
+            break
         except Exception:
             continue
 
-    if best_db is None or best_vouchers <= 0:
+    if best_db is None:
         return {}
 
     try:
@@ -189,7 +226,7 @@ def load_db():
     db.setdefault("logs", [])
     return db
 
-def save_db(db):
+def save_db(db, allow_shrink=False):
     db.setdefault("meta", {})
     db["meta"]["updated_at"] = now()
 
@@ -209,7 +246,7 @@ def save_db(db):
 
         baseline_count = max(old_count, last_good_count)
 
-        if baseline_count >= 10 and new_count <= max(3, baseline_count // 3):
+        if not allow_shrink and baseline_count >= 10 and new_count <= max(3, baseline_count // 3):
             suspect = DB_FILE + ".suspect-shrink"
             try:
                 save_json(suspect, db)
@@ -233,32 +270,28 @@ def save_db(db):
     try:
         saved_db = load_json(DB_FILE, {})
         saved_vouchers = saved_db.get("vouchers", {}) if isinstance(saved_db, dict) else {}
-        saved_count = len(saved_vouchers) if isinstance(saved_vouchers, dict) else 0
 
-        current_last_good_db = load_json(last_good_file, {})
-        current_last_good_vouchers = current_last_good_db.get("vouchers", {}) if isinstance(current_last_good_db, dict) else {}
-        current_last_good_count = len(current_last_good_vouchers) if isinstance(current_last_good_vouchers, dict) else 0
-
-        if saved_count >= current_last_good_count or current_last_good_count < 10:
+        if isinstance(saved_db, dict) and isinstance(saved_vouchers, dict):
             save_json(last_good_file, saved_db)
     except Exception:
         pass
 
 def append_log(event_type, message, voucher_code="", mac="", ip="", result="OK"):
-    db = load_db()
-    logs = db.setdefault("logs", [])
-    logs.append({
-        "time": now(),
-        "type": event_type,
-        "message": message,
-        "voucher_code": voucher_code,
-        "mac": mac,
-        "ip": ip,
-        "result": result
-    })
-    if len(logs) > 500:
-        db["logs"] = logs[-500:]
-    save_db(db)
+    with db_transaction():
+        db = load_db()
+        logs = db.setdefault("logs", [])
+        logs.append({
+            "time": now(),
+            "type": event_type,
+            "message": message,
+            "voucher_code": voucher_code,
+            "mac": mac,
+            "ip": ip,
+            "result": result
+        })
+        if len(logs) > 500:
+            db["logs"] = logs[-500:]
+        save_db(db)
 
 def create_backup():
     backup_dir = "/etc/wifiportal/backup"

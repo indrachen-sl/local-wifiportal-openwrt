@@ -20,7 +20,7 @@ OpenWrt 本地 WiFi 兑换码认证 Portal。它把路由器的 80 端口作为�
 | 后台地址 | `http://192.168.10.1/admin` |
 | 密码 | `admin123456` |
 
-一键部署脚本会自动设置默认密码 `admin123456`，部署完成时也会直接显示账号和密码。
+首次部署且尚未设置后台密码时，脚本会设置并显示默认密码 `admin123456`。重新部署或更新会保留现有密码；若已修改密码，请继续使用修改后的密码登录。
 
 如需在路由器 SSH 中重置后台密码：
 
@@ -52,26 +52,12 @@ wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwr
 - 备份 `/etc/config/uhttpd`，再把 LuCI/uhttpd HTTP 监听端口改为 `8080`
 - 检查 Python 语法
 - 启用并启动 WiFiPortal 服务
-- 设置默认后台密码 `admin123456`
+- 仅在首次安装时设置默认后台密码 `admin123456`；更新时保留现有密码
 - 运行部署后自检，检查服务、80/8080 端口、认证页和后台页，并保存结果到 `/tmp/wifiportal-install-check.log`
 
 ## 快速更新
 
-只更新主程序：
-
-```sh
-wget -qO /usr/lib/wifiportal/server.py https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwrt/main/wifiportal/server.py
-/etc/init.d/wifiportal restart
-```
-
-只更新启动器：
-
-```sh
-wget -qO /usr/bin/wifiportal_launcher.py https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwrt/main/wifiportal.py
-/etc/init.d/wifiportal restart
-```
-
-重新完整部署：
+更新涉及多个 Python 模块，请运行完整部署脚本：
 
 ```sh
 wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwrt/main/install.sh | sh
@@ -102,6 +88,8 @@ wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwr
 - 延长时间、重置使用状态
 - 查看兑换码绑定设备和使用日志
 - 勾选兑换码后批量修改批次、备注、套餐名、时长、设备数、限速和启用状态
+- 修改使用时长并重算到期时间时，会同步已绑定设备和在线放行期限；降低设备数会移除超出名额的旧绑定
+- 延长未使用兑换码时增加可用时长，首次使用后才开始倒计时
 - 导出未使用兑换码 CSV，包含批次名
 - 打印当前筛选兑换码、当前批次或勾选的兑换码
 
@@ -124,7 +112,7 @@ wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwr
 - 白名单：`/admin/whitelist`
 - 黑名单：`/admin/blacklist`
 
-白名单设备可直接放行。黑名单设备会被禁止或限制访问。后台支持手动输入 MAC，也支持从设备记录中选择。
+白名单设备可直接放行。黑名单设备会被禁止或限制访问。后台支持手动输入 MAC，也支持从设备记录中选择。移出白名单会撤销该设备的白名单在线会话，重启后不会自动恢复放行。
 
 ### 5. 防火墙拦截
 
@@ -134,6 +122,8 @@ wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwr
 - 未认证设备 HTTP 流量重定向到 Portal
 - 支持恢复已认证会话
 - 支持查看防火墙状态
+- 管理员关闭认证拦截后会保存状态，服务或路由器重启后仍保持关闭；再次启用需在后台操作
+- 已存在的 nftables 表不会在每次兑换码认证时重建
 - 服务停止时会清理 WiFiPortal 相关 nftables 表
 
 ### 6. QoS 限速
@@ -145,6 +135,7 @@ wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwr
 - 支持恢复在线设备限速规则
 - 支持清理 QoS 规则
 - 设备或系统不支持时可降级，不影响基础认证
+- `tc` 创建限速规则失败时会记录失败，不再报告应用成功
 
 ### 7. 页面设置
 
@@ -163,6 +154,7 @@ wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwr
 - 修改后台密码：`/admin/password`
 - 后台 POST 操作 CSRF 防护，避免登录状态下被外部页面诱导执行管理操作
 - 后台会话密钥会持久保存，服务重启不会无故退出；修改密码时会自动轮换会话密钥并要求重新登录
+- `/admin/api/devices-realtime` 仅允许已登录管理员访问；修改密码后旧会话立即失效
 
 ### 9. 日志、健康检查和维护
 
@@ -188,6 +180,10 @@ wget -qO- https://raw.githubusercontent.com/indrachen-sl/local-wifiportal-openwr
 - 清理旧备份
 - 自动备份兑换码和设置数据
 - 数据库写入使用临时文件替换，降低断电损坏风险
+- 登录、后台修改和维护任务的数据库读改写使用事务锁，避免并发操作互相覆盖
+- 管理备份包含启动器、实际运行的 Python 模块、WiFiPortal 配置及相关 OpenWrt 配置；恢复后会同步数据库有效副本
+- 删除大量过期兑换码前先创建安全备份，确认备份成功后才允许更新数据库
+- 数据库损坏时优先从最近成功保存的有效副本恢复，避免已删除的兑换码被旧副本重新带回
 
 更新与安装备份入口：`/admin/install-backups`
 
@@ -337,5 +333,3 @@ wifiportal-diagnose
 ## 安全提示
 
 默认密码 `admin123456` 方便首次部署。正式使用时建议登录后台后到 `/admin/password` 修改为更强密码；如果仍使用默认密码，后台会显示安全提醒。
-
-
